@@ -1,0 +1,1399 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Space Battle Fleet</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+    canvas { display: block; }
+    ::-webkit-scrollbar { display: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+// ============================================================
+// SPACE BATTLE FLEET - Complete RTS Game
+// React + HTML5 Canvas + Tailwind CSS (Single File)
+// ============================================================
+
+const { useState, useRef, useEffect, useCallback } = React;
+
+// ==================== CONSTANTS ====================
+const MAP_W = 3000;
+const MAP_H = 2000;
+const MAX_POP = 500;
+const ATTACK_RANGE = 120;
+const CAMERA_SPEED = 1000;
+const EDGE_SCROLL_MARGIN = 30;
+const EDGE_SCROLL_SPEED = 1000;
+const MIN_ZOOM = 0.4;
+const MAX_ZOOM = 1.5;
+const ZOOM_STEP = 0.1;
+const UI_SYNC_INTERVAL = 0.1;
+const AI_PULSE_INTERVAL = 5;
+const SEPARATION_DIST = 35;
+const SEPARATION_STRENGTH = 100;
+const PLANET_RADIUS = 30;
+
+const UNIT_STATS = {
+  1: { name: '요격기', hp: 30, atk: 5, speed: 120, spawnTime: 2.4, radius: 6, pop: 1, gold: 1, shape: 'triangle' },
+  2: { name: '구축함', hp: 80, atk: 15, speed: 80, spawnTime: 4.8, radius: 9, pop: 2, gold: 2, shape: 'square' },
+  3: { name: '전함', hp: 200, atk: 40, speed: 40, spawnTime: 7.2, radius: 14, pop: 3, gold: 3, shape: 'circle' },
+};
+
+const FACTION_COLORS = {
+  0: { main: '#888888', light: '#aaaaaa', dark: '#555555', glow: 'rgba(136,136,136,0.3)' },
+  1: { main: '#4499ff', light: '#66bbff', dark: '#2266cc', glow: 'rgba(68,153,255,0.4)' },
+  2: { main: '#ff4455', light: '#ff6677', dark: '#cc2233', glow: 'rgba(255,68,85,0.4)' },
+};
+
+// Minimap
+const MM_W = 300;
+const MM_H = 300;
+const MM_MARGIN = 10;
+
+// ==================== HELPERS ====================
+let _idCounter = 0;
+const genId = () => `e${++_idCounter}`;
+const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// ==================== APP COMPONENT ====================
+const App = () => {
+  const canvasRef = useRef(null);
+  const animFrameRef = useRef(null);
+
+  // ---- Game State (useRef - no re-renders) ----
+  const G = useRef({
+    phase: 'start',
+    gameResult: '',
+    planets: [],
+    units: [],
+    particles: [],
+    stars: [],
+    camera: { x: 0, y: 0, w: 800, h: 600, zoom: 1 },
+    mouse: { x: 0, y: 0, down: false, button: -1, dragSX: 0, dragSY: 0, isDragging: false },
+    keys: new Set(),
+    selectedPlanetIds: new Set(),
+    selectedUnitIds: new Set(),
+    controlGroups: { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() },
+    playerGold: 0,
+    playerPop: 0,
+    aiPop: 0,
+    aiTimer: 0,
+    uiSyncTimer: 0,
+    lastClickTime: 0,
+    lastClickPlanetId: null,
+    isMinimapDragging: false,
+    lastFrameTime: 0,
+  });
+
+  // ---- UI State (useState - periodic sync) ----
+  const [ui, setUi] = useState({
+    phase: 'start',
+    gameResult: '',
+    playerGold: 0,
+    playerPop: 0,
+    selectedPlanets: [],
+    selectedUnitsCount: 0,
+    controlGroupCounts: { 1: 0, 2: 0, 3: 0, 4: 0 },
+  });
+
+  // ==================== GAME INITIALIZATION ====================
+  const initGame = useCallback(() => {
+    const g = G.current;
+    _idCounter = 0;
+    g.planets = [];
+    g.units = [];
+    g.particles = [];
+    g.playerGold = 0;
+    g.playerPop = 0;
+    g.aiPop = 0;
+    g.aiTimer = 0;
+    g.uiSyncTimer = 0;
+    g.selectedPlanetIds = new Set();
+    g.selectedUnitIds = new Set();
+    g.controlGroups = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() };
+    g.gameResult = '';
+
+    // Player planets (left side)
+    g.planets.push(createPlanet(350, 650, 1, 500));
+    g.planets.push(createPlanet(350, 1350, 1, 500));
+
+    // AI planets (right side)
+    g.planets.push(createPlanet(2650, 650, 2, 500));
+    g.planets.push(createPlanet(2650, 1350, 2, 500));
+
+    // Neutral planets (random, min 150px apart)
+    const neutralCount = 15;
+    let attempts = 0;
+    while (g.planets.length < 4 + neutralCount && attempts < 5000) {
+      attempts++;
+      const nx = 200 + Math.random() * (MAP_W - 400);
+      const ny = 150 + Math.random() * (MAP_H - 300);
+      let tooClose = false;
+      for (const p of g.planets) {
+        if (dist(nx, ny, p.x, p.y) < 180) { tooClose = true; break; }
+      }
+      if (!tooClose) {
+        g.planets.push(createPlanet(nx, ny, 0, 200));
+      }
+    }
+
+    // Camera initial: center on player area
+    const canvas = canvasRef.current;
+    g.camera.w = canvas.width;
+    g.camera.h = canvas.height;
+    g.camera.zoom = 1;
+    const viewW = g.camera.w / g.camera.zoom;
+    const viewH = g.camera.h / g.camera.zoom;
+    g.camera.x = clamp(350 - viewW / 2, 0, MAP_W - viewW);
+    g.camera.y = clamp(1000 - viewH / 2, 0, MAP_H - viewH);
+
+    g.phase = 'playing';
+    g.lastFrameTime = performance.now();
+
+    setUi(prev => ({ ...prev, phase: 'playing', gameResult: '', playerGold: 0, playerPop: 0 }));
+  }, []);
+
+  function createPlanet(x, y, owner, hp) {
+    return {
+      id: genId(), x, y, radius: PLANET_RADIUS,
+      owner, hp, maxHp: owner === 0 ? 200 : 500,
+      level: 1,
+      productionType: 1,
+      spawnTimer: 0,
+      rallyPoint: null,
+      rallyPointPlanetId: null,
+    };
+  }
+
+  // ==================== SPAWN UNIT ====================
+  function spawnUnit(planet, g) {
+    const stats = UNIT_STATS[planet.productionType];
+    const pop = planet.owner === 1 ? g.playerPop : g.aiPop;
+    if (pop + stats.pop > MAX_POP) return null;
+
+    const angle = Math.random() * Math.PI * 2;
+    const spawnDist = planet.radius + stats.radius + 8;
+    const u = {
+      id: genId(),
+      owner: planet.owner,
+      type: planet.productionType,
+      x: planet.x + Math.cos(angle) * spawnDist,
+      y: planet.y + Math.sin(angle) * spawnDist,
+      hp: stats.hp,
+      maxHp: stats.hp,
+      vx: 0, vy: 0,
+      state: 'IDLE',
+      homePlanetId: planet.id,
+      targetPlanetId: null,
+      targetX: null, targetY: null,
+      attackCooldown: 0,
+      attackTargetId: null,
+    };
+
+    if (planet.owner === 1) g.playerPop += stats.pop;
+    else g.aiPop += stats.pop;
+
+    // If rally point set, immediately depart
+    if (planet.rallyPoint) {
+      u.state = 'MOVING';
+      u.homePlanetId = null;
+      u.targetX = planet.rallyPoint.x;
+      u.targetY = planet.rallyPoint.y;
+      u.targetPlanetId = planet.rallyPointPlanetId || null;
+    }
+
+    return u;
+  }
+
+  // ==================== UPDATE FUNCTIONS ====================
+  function update(dt) {
+    const g = G.current;
+    if (g.phase !== 'playing') return;
+
+    updateCamera(dt, g);
+    updatePlanets(dt, g);
+    updateUnits(dt, g);
+    updateParticles(dt, g);
+    updateAI(dt, g);
+    checkWinLose(g);
+    syncUI(dt, g);
+  }
+
+  function updateCamera(dt, g) {
+    const spd = CAMERA_SPEED * dt;
+    const k = g.keys;
+    if (k.has('KeyW') || k.has('ArrowUp')) g.camera.y -= spd;
+    if (k.has('KeyS') || k.has('ArrowDown')) g.camera.y += spd;
+    if (k.has('KeyA') || k.has('ArrowLeft')) g.camera.x -= spd;
+    if (k.has('KeyD') || k.has('ArrowRight')) g.camera.x += spd;
+
+    // Edge scrolling
+    const mx = g.mouse.x;
+    const my = g.mouse.y;
+    const sw = g.camera.w * g.camera.zoom;
+    const sh = g.camera.h * g.camera.zoom;
+    const espd = EDGE_SCROLL_SPEED * dt;
+    if (mx <= EDGE_SCROLL_MARGIN) g.camera.x -= espd;
+    if (mx >= sw - EDGE_SCROLL_MARGIN) g.camera.x += espd;
+    if (my <= EDGE_SCROLL_MARGIN) g.camera.y -= espd;
+    if (my >= sh - EDGE_SCROLL_MARGIN) g.camera.y += espd;
+
+    const viewW = g.camera.w / g.camera.zoom;
+    const viewH = g.camera.h / g.camera.zoom;
+    g.camera.x = clamp(g.camera.x, 0, Math.max(0, MAP_W - viewW));
+    g.camera.y = clamp(g.camera.y, 0, Math.max(0, MAP_H - viewH));
+  }
+
+  function updatePlanets(dt, g) {
+    for (const p of g.planets) {
+      if (p.owner === 0) continue; // neutrals don't produce
+      const stats = UNIT_STATS[p.productionType];
+      const reduction = Math.min(0.9, 0.1 * (p.level - 1));
+      const adjSpawnTime = stats.spawnTime * (1 - reduction);
+
+      p.spawnTimer += dt;
+      if (p.spawnTimer >= adjSpawnTime) {
+        p.spawnTimer -= adjSpawnTime;
+        const u = spawnUnit(p, g);
+        if (u) g.units.push(u);
+      }
+    }
+  }
+
+  function updateUnits(dt, g) {
+    // Separation pass
+    const len = g.units.length;
+    for (let i = 0; i < len; i++) {
+      const a = g.units[i];
+      let sepX = 0, sepY = 0;
+      for (let j = 0; j < len; j++) {
+        if (i === j) continue;
+        const b = g.units[j];
+        const dx = b.x - a.x;
+        if (Math.abs(dx) > SEPARATION_DIST) continue;
+        const dy = b.y - a.y;
+        if (Math.abs(dy) > SEPARATION_DIST) continue;
+        const d = Math.hypot(dx, dy);
+        const minD = UNIT_STATS[a.type].radius + UNIT_STATS[b.type].radius + 4;
+        if (d < minD && d > 0.1) {
+          const force = (minD - d) / minD;
+          sepX -= (dx / d) * force;
+          sepY -= (dy / d) * force;
+        }
+      }
+      a.x += sepX * SEPARATION_STRENGTH * dt;
+      a.y += sepY * SEPARATION_STRENGTH * dt;
+    }
+
+    // Per-unit update
+    for (const u of g.units) {
+      u.attackCooldown -= dt;
+
+      // Find attack target (prioritize enemy units, then planets)
+      let atkTarget = null;
+      let atkType = null; // 'unit' or 'planet'
+      let minDist = ATTACK_RANGE;
+
+      // Check enemy units
+      for (const e of g.units) {
+        if (e.owner === u.owner || e.hp <= 0) continue;
+        const dx = e.x - u.x;
+        if (Math.abs(dx) > ATTACK_RANGE) continue;
+        const dy = e.y - u.y;
+        if (Math.abs(dy) > ATTACK_RANGE) continue;
+        const d = Math.hypot(dx, dy);
+        if (d < minDist) {
+          minDist = d;
+          atkTarget = e;
+          atkType = 'unit';
+        }
+      }
+
+      // Check enemy/neutral planets (only if no enemy unit found)
+      if (!atkTarget) {
+        for (const p of g.planets) {
+          if (p.owner === u.owner) continue;
+          const d = dist(u.x, u.y, p.x, p.y) - p.radius;
+          if (d < ATTACK_RANGE && d < minDist) {
+            minDist = d;
+            atkTarget = p;
+            atkType = 'planet';
+          }
+        }
+      }
+
+      // Attack if target found
+      if (atkTarget && u.attackCooldown <= 0) {
+        u.attackCooldown = 0.5;
+        if (atkType === 'unit') {
+          atkTarget.hp -= UNIT_STATS[u.type].atk;
+          if (atkTarget.hp <= 0) {
+            // Gold reward
+            const reward = UNIT_STATS[atkTarget.type].gold;
+            if (u.owner === 1) g.playerGold += reward;
+            // Pop return
+            const deadPop = UNIT_STATS[atkTarget.type].pop;
+            if (atkTarget.owner === 1) g.playerPop -= deadPop;
+            else g.aiPop -= deadPop;
+          }
+        } else {
+          atkTarget.hp -= UNIT_STATS[u.type].atk;
+          if (atkTarget.hp <= 0) {
+            // Capture planet
+            capturePlanet(atkTarget, u.owner, g);
+          }
+        }
+        // Spawn laser particle
+        const tx = atkType === 'unit' ? atkTarget.x : atkTarget.x;
+        const ty = atkType === 'unit' ? atkTarget.y : atkTarget.y;
+        g.particles.push({
+          type: 'laser',
+          x1: u.x, y1: u.y,
+          x2: tx, y2: ty,
+          color: FACTION_COLORS[u.owner].light,
+          life: 0.15, maxLife: 0.15,
+        });
+      }
+
+      // Movement logic
+      if (atkTarget && atkType === 'unit') {
+        // Stop to fight enemy units
+        u.vx = 0; u.vy = 0;
+      } else if (u.targetX !== null && u.targetY !== null) {
+        // Move toward target
+        const dx = u.targetX - u.x;
+        const dy = u.targetY - u.y;
+        const d = Math.hypot(dx, dy);
+        const stats = UNIT_STATS[u.type];
+
+        // Check if arrived at target planet
+        if (u.targetPlanetId) {
+          const tp = g.planets.find(p => p.id === u.targetPlanetId);
+          if (tp) {
+            const arrivalDist = tp.radius + stats.radius + 15;
+            if (d < arrivalDist || dist(u.x, u.y, tp.x, tp.y) < arrivalDist) {
+              // Arrived at planet
+              if (tp.owner === u.owner) {
+                // Friendly planet - check for chain rally
+                if (tp.rallyPoint) {
+                  u.targetX = tp.rallyPoint.x;
+                  u.targetY = tp.rallyPoint.y;
+                  u.targetPlanetId = tp.rallyPointPlanetId || null;
+                } else {
+                  u.state = 'IDLE';
+                  u.homePlanetId = tp.id;
+                  u.targetX = null; u.targetY = null;
+                  u.targetPlanetId = null;
+                  u.vx = 0; u.vy = 0;
+                }
+              }
+              // Enemy/neutral planet: keep attacking (handled above)
+            } else {
+              const speed = stats.speed;
+              u.vx = (dx / d) * speed;
+              u.vy = (dy / d) * speed;
+            }
+          } else {
+            // Target planet doesn't exist
+            u.targetPlanetId = null;
+            u.targetX = null; u.targetY = null;
+          }
+        } else {
+          // Moving to coordinates
+          if (d < 10) {
+            u.state = 'IDLE_FIELD';
+            u.targetX = null; u.targetY = null;
+            u.vx = 0; u.vy = 0;
+          } else {
+            const speed = UNIT_STATS[u.type].speed;
+            u.vx = (dx / d) * speed;
+            u.vy = (dy / d) * speed;
+          }
+        }
+      } else {
+        // No target, stay idle
+        u.vx = 0; u.vy = 0;
+      }
+
+      // Apply velocity
+      u.x += u.vx * dt;
+      u.y += u.vy * dt;
+
+      // Clamp to map
+      u.x = clamp(u.x, 5, MAP_W - 5);
+      u.y = clamp(u.y, 5, MAP_H - 5);
+    }
+
+    // Remove dead units
+    g.units = g.units.filter(u => u.hp > 0);
+
+    // Clean up selected unit IDs (remove dead)
+    const aliveIds = new Set(g.units.map(u => u.id));
+    for (const id of g.selectedUnitIds) {
+      if (!aliveIds.has(id)) g.selectedUnitIds.delete(id);
+    }
+    for (const key of [1,2,3,4]) {
+      for (const id of g.controlGroups[key]) {
+        if (!aliveIds.has(id)) g.controlGroups[key].delete(id);
+      }
+    }
+  }
+
+  function capturePlanet(planet, newOwner, g) {
+    planet.owner = newOwner;
+    planet.hp = planet.maxHp;
+    planet.level = 1;
+    planet.productionType = 1;
+    planet.spawnTimer = 0;
+    planet.rallyPoint = null;
+    planet.rallyPointPlanetId = null;
+    // Units at this planet become homeless
+    for (const u of g.units) {
+      if (u.homePlanetId === planet.id && u.owner !== newOwner) {
+        u.homePlanetId = null;
+      }
+    }
+  }
+
+  function updateParticles(dt, g) {
+    for (const p of g.particles) {
+      p.life -= dt;
+    }
+    g.particles = g.particles.filter(p => p.life > 0);
+  }
+
+  function updateAI(dt, g) {
+    g.aiTimer += dt;
+    if (g.aiTimer < AI_PULSE_INTERVAL) return;
+    g.aiTimer -= AI_PULSE_INTERVAL;
+
+    const aiPlanets = g.planets.filter(p => p.owner === 2);
+    const hostilePlanets = g.planets.filter(p => p.owner !== 2);
+
+    for (const p of aiPlanets) {
+      // 30% chance to change production type
+      if (Math.random() < 0.3) {
+        const r = Math.random();
+        if (r < 0.5) p.productionType = 1;
+        else if (r < 0.8) p.productionType = 2;
+        else p.productionType = 3;
+      }
+
+      // Count idle units at this planet
+      const idleUnits = g.units.filter(u => u.owner === 2 && u.homePlanetId === p.id && u.state === 'IDLE');
+      if (idleUnits.length > 5 && hostilePlanets.length > 0) {
+        const target = hostilePlanets[Math.floor(Math.random() * hostilePlanets.length)];
+        for (const u of idleUnits) {
+          u.state = 'MOVING';
+          u.homePlanetId = null;
+          u.targetPlanetId = target.id;
+          u.targetX = target.x;
+          u.targetY = target.y;
+        }
+      }
+    }
+
+    // AI upgrade: if AI has gold (simulated), upgrade random planet
+    // AI doesn't use gold system (simplified), but we give AI auto-upgrades over time
+    for (const p of aiPlanets) {
+      if (Math.random() < 0.15 && p.level < 10) {
+        p.level++;
+      }
+    }
+  }
+
+  function checkWinLose(g) {
+    const playerPlanets = g.planets.filter(p => p.owner === 1).length;
+    const aiPlanets = g.planets.filter(p => p.owner === 2).length;
+
+    if (aiPlanets === 0) {
+      g.phase = 'gameover';
+      g.gameResult = 'victory';
+      setUi(prev => ({ ...prev, phase: 'gameover', gameResult: 'victory' }));
+    } else if (playerPlanets === 0) {
+      g.phase = 'gameover';
+      g.gameResult = 'defeat';
+      setUi(prev => ({ ...prev, phase: 'gameover', gameResult: 'defeat' }));
+    }
+  }
+
+  function syncUI(dt, g) {
+    g.uiSyncTimer += dt;
+    if (g.uiSyncTimer < UI_SYNC_INTERVAL) return;
+    g.uiSyncTimer -= UI_SYNC_INTERVAL;
+
+    const selPlanets = g.planets.filter(p => g.selectedPlanetIds.has(p.id));
+    setUi({
+      phase: g.phase,
+      gameResult: g.gameResult,
+      playerGold: g.playerGold,
+      playerPop: g.playerPop,
+      selectedPlanets: selPlanets.map(p => ({
+        id: p.id, hp: p.hp, maxHp: p.maxHp, level: p.level,
+        productionType: p.productionType, owner: p.owner,
+      })),
+      selectedUnitsCount: g.selectedUnitIds.size,
+      controlGroupCounts: {
+        1: g.controlGroups[1].size,
+        2: g.controlGroups[2].size,
+        3: g.controlGroups[3].size,
+        4: g.controlGroups[4].size,
+      },
+    });
+  }
+
+  // ==================== RENDER ====================
+  function render(ctx) {
+    const g = G.current;
+    const cam = g.camera;
+    const W = ctx.canvas.width;
+    const H = ctx.canvas.height;
+
+    // Clear
+    ctx.fillStyle = '#080812';
+    ctx.fillRect(0, 0, W, H);
+
+    // Stars
+    ctx.save();
+    for (const s of g.stars) {
+      const sx = s.x * 0.7 - cam.x * 0.3;
+      const sy = s.y * 0.7 - cam.y * 0.3;
+      if (sx < -5 || sx > W + 5 || sy < -5 || sy > H + 5) continue;
+      ctx.globalAlpha = s.brightness;
+      ctx.fillStyle = s.color;
+      ctx.fillRect(sx, sy, s.size, s.size);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // World transform
+    ctx.save();
+    ctx.scale(cam.zoom, cam.zoom);
+    ctx.translate(-cam.x, -cam.y);
+
+    // Map border
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, MAP_W, MAP_H);
+
+    // Grid
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= MAP_W; x += 200) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAP_H); ctx.stroke();
+    }
+    for (let y = 0; y <= MAP_H; y += 200) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(MAP_W, y); ctx.stroke();
+    }
+
+    // Rally point lines
+    for (const p of g.planets) {
+      if (p.owner === 1 && p.rallyPoint && g.selectedPlanetIds.has(p.id)) {
+        ctx.strokeStyle = 'rgba(255,255,100,0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([8, 6]);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.rallyPoint.x, p.rallyPoint.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Rally marker
+        ctx.fillStyle = 'rgba(255,255,100,0.8)';
+        ctx.beginPath();
+        ctx.arc(p.rallyPoint.x, p.rallyPoint.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Particles (lasers + move markers)
+    for (const p of g.particles) {
+      if (p.type === 'laser') {
+        const alpha = p.life / p.maxLife;
+        ctx.strokeStyle = p.color;
+        ctx.globalAlpha = alpha;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(p.x1, p.y1);
+        ctx.lineTo(p.x2, p.y2);
+        ctx.stroke();
+      } else if (p.type === 'moveMarker') {
+        const t = 1 - p.life / p.maxLife; // 0 -> 1
+        const alpha = p.life / p.maxLife;
+        const r = p.radius * (0.6 + t * 0.6);
+        ctx.globalAlpha = alpha;
+        // Outer ring
+        ctx.strokeStyle = '#44ff44';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+        // Inner X mark
+        const x = p.x, y = p.y, s = r * 0.4;
+        ctx.beginPath();
+        ctx.moveTo(x - s, y - s); ctx.lineTo(x + s, y + s);
+        ctx.moveTo(x + s, y - s); ctx.lineTo(x - s, y + s);
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // Planets
+    const viewW = cam.w / cam.zoom;
+    const viewH = cam.h / cam.zoom;
+    for (const p of g.planets) {
+      const sx = p.x - cam.x;
+      const sy = p.y - cam.y;
+      if (sx < -80 || sx > viewW + 80 || sy < -80 || sy > viewH + 80) continue;
+
+      const colors = FACTION_COLORS[p.owner];
+
+      // Glow
+      ctx.shadowColor = colors.glow;
+      ctx.shadowBlur = 25;
+      ctx.fillStyle = colors.dark;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Surface
+      const gradient = ctx.createRadialGradient(p.x - 5, p.y - 5, 2, p.x, p.y, p.radius);
+      gradient.addColorStop(0, colors.light);
+      gradient.addColorStop(1, colors.dark);
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Selection ring
+      if (g.selectedPlanetIds.has(p.id)) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius + 6, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // HP bar
+      const barW = 50;
+      const barH = 5;
+      const barX = p.x - barW / 2;
+      const barY = p.y - p.radius - 15;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(barX, barY, barW, barH);
+      const hpRatio = Math.max(0, p.hp / p.maxHp);
+      ctx.fillStyle = hpRatio > 0.5 ? '#44ff44' : hpRatio > 0.25 ? '#ffaa00' : '#ff4444';
+      ctx.fillRect(barX, barY, barW * hpRatio, barH);
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(barX, barY, barW, barH);
+
+      // Level text
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`Lv${p.level}`, p.x, p.y);
+
+      // Production icon below planet
+      if (p.owner !== 0) {
+        ctx.font = '10px sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillText(UNIT_STATS[p.productionType].name, p.x, p.y + p.radius + 12);
+      }
+    }
+
+    // Units
+    for (const u of g.units) {
+      const sx = u.x - cam.x;
+      const sy = u.y - cam.y;
+      if (sx < -20 || sx > viewW + 20 || sy < -20 || sy > viewH + 20) continue;
+
+      const colors = FACTION_COLORS[u.owner];
+      const stats = UNIT_STATS[u.type];
+      const r = stats.radius;
+      const selected = g.selectedUnitIds.has(u.id);
+
+      ctx.fillStyle = colors.main;
+      ctx.strokeStyle = selected ? '#ffffff' : colors.light;
+      ctx.lineWidth = selected ? 2 : 1;
+
+      if (u.type === 1) {
+        // Triangle (interceptor) - pointing in movement direction
+        const angle = Math.atan2(u.vy, u.vx) || 0;
+        ctx.save();
+        ctx.translate(u.x, u.y);
+        ctx.rotate(angle);
+        ctx.beginPath();
+        ctx.moveTo(r + 2, 0);
+        ctx.lineTo(-r, -r * 0.7);
+        ctx.lineTo(-r, r * 0.7);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      } else if (u.type === 2) {
+        // Square (destroyer)
+        ctx.fillRect(u.x - r, u.y - r, r * 2, r * 2);
+        ctx.strokeRect(u.x - r, u.y - r, r * 2, r * 2);
+      } else {
+        // Circle (battleship)
+        ctx.beginPath();
+        ctx.arc(u.x, u.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        // Inner detail
+        ctx.fillStyle = colors.light;
+        ctx.beginPath();
+        ctx.arc(u.x, u.y, r * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Unit HP bar (only if damaged)
+      if (u.hp < u.maxHp) {
+        const bw = r * 2.5;
+        const bh = 3;
+        const bx = u.x - bw / 2;
+        const by = u.y - r - 6;
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(bx, by, bw, bh);
+        const hpR = u.hp / u.maxHp;
+        ctx.fillStyle = hpR > 0.5 ? '#44ff44' : '#ff4444';
+        ctx.fillRect(bx, by, bw * hpR, bh);
+      }
+    }
+
+    // Selection box
+    if (g.mouse.isDragging && g.mouse.button === 0) {
+      const wx1 = g.mouse.dragSX / cam.zoom + cam.x;
+      const wy1 = g.mouse.dragSY / cam.zoom + cam.y;
+      const wx2 = g.mouse.x / cam.zoom + cam.x;
+      const wy2 = g.mouse.y / cam.zoom + cam.y;
+      // Only draw if we started dragging on the main canvas (not minimap)
+      if (!g.isMinimapDragging) {
+        ctx.strokeStyle = 'rgba(0,255,0,0.8)';
+        ctx.lineWidth = 1;
+        ctx.fillStyle = 'rgba(0,255,0,0.1)';
+        const x = Math.min(wx1, wx2);
+        const y = Math.min(wy1, wy2);
+        const w = Math.abs(wx2 - wx1);
+        const h = Math.abs(wy2 - wy1);
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeRect(x, y, w, h);
+      }
+    }
+
+    ctx.restore();
+
+    // ---- Minimap ----
+    drawMinimap(ctx, g, W, H);
+  }
+
+  function drawMinimap(ctx, g, W, H) {
+    const mmX = W - MM_W - MM_MARGIN;
+    const mmY = H - MM_H - MM_MARGIN;
+    const scaleX = MM_W / MAP_W;
+    const scaleY = MM_H / MAP_H;
+
+    // Background
+    ctx.fillStyle = 'rgba(0,0,20,0.85)';
+    ctx.fillRect(mmX, mmY, MM_W, MM_H);
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(mmX, mmY, MM_W, MM_H);
+
+    // Planets on minimap
+    for (const p of g.planets) {
+      const px = mmX + p.x * scaleX;
+      const py = mmY + p.y * scaleY;
+      ctx.fillStyle = FACTION_COLORS[p.owner].main;
+      ctx.beginPath();
+      ctx.arc(px, py, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Units on minimap (as small dots)
+    for (const u of g.units) {
+      const px = mmX + u.x * scaleX;
+      const py = mmY + u.y * scaleY;
+      ctx.fillStyle = FACTION_COLORS[u.owner].main;
+      ctx.fillRect(px - 1, py - 1, 2, 2);
+    }
+
+    // Camera viewport rectangle
+    const vx = mmX + g.camera.x * scaleX;
+    const vy = mmY + g.camera.y * scaleY;
+    const vw = (g.camera.w / g.camera.zoom) * scaleX;
+    const vh = (g.camera.h / g.camera.zoom) * scaleY;
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(vx, vy, vw, vh);
+  }
+
+  // ==================== INPUT HANDLERS ====================
+  function isOnMinimap(sx, sy) {
+    const canvas = canvasRef.current;
+    if (!canvas) return false;
+    const mmX = canvas.width - MM_W - MM_MARGIN;
+    const mmY = canvas.height - MM_H - MM_MARGIN;
+    return sx >= mmX && sx <= mmX + MM_W && sy >= mmY && sy <= mmY + MM_H;
+  }
+
+  function minimapToWorld(sx, sy) {
+    const canvas = canvasRef.current;
+    const mmX = canvas.width - MM_W - MM_MARGIN;
+    const mmY = canvas.height - MM_H - MM_MARGIN;
+    const wx = ((sx - mmX) / MM_W) * MAP_W;
+    const wy = ((sy - mmY) / MM_H) * MAP_H;
+    return { x: clamp(wx, 0, MAP_W), y: clamp(wy, 0, MAP_H) };
+  }
+
+  function getPlanetAtWorld(wx, wy, g) {
+    for (const p of g.planets) {
+      if (dist(wx, wy, p.x, p.y) <= p.radius + 5) return p;
+    }
+    return null;
+  }
+
+  function handleMouseDown(e) {
+    const g = G.current;
+    if (g.phase !== 'playing') return;
+
+    const sx = e.clientX;
+    const sy = e.clientY;
+    g.mouse.x = sx;
+    g.mouse.y = sy;
+    g.mouse.down = true;
+    g.mouse.button = e.button;
+    g.mouse.dragSX = sx;
+    g.mouse.dragSY = sy;
+    g.mouse.isDragging = false;
+
+    if (e.button === 0) { // Left click
+      if (isOnMinimap(sx, sy)) {
+        g.isMinimapDragging = true;
+        const wp = minimapToWorld(sx, sy);
+        const viewW = g.camera.w / g.camera.zoom;
+        const viewH = g.camera.h / g.camera.zoom;
+        g.camera.x = clamp(wp.x - viewW / 2, 0, MAP_W - viewW);
+        g.camera.y = clamp(wp.y - viewH / 2, 0, MAP_H - viewH);
+        return;
+      }
+
+      const wx = sx / g.camera.zoom + g.camera.x;
+      const wy = sy / g.camera.zoom + g.camera.y;
+      const clickedPlanet = getPlanetAtWorld(wx, wy, g);
+
+      // Double-click detection
+      const now = Date.now();
+      if (clickedPlanet && clickedPlanet.owner === 1) {
+        if (now - g.lastClickTime < 300 && g.lastClickPlanetId === clickedPlanet.id) {
+          // Double click: select all visible friendly planets
+          g.selectedPlanetIds.clear();
+          g.selectedUnitIds.clear();
+          for (const p of g.planets) {
+            if (p.owner !== 1) continue;
+            const viewW = g.camera.w / g.camera.zoom;
+            const viewH = g.camera.h / g.camera.zoom;
+            const psx = p.x - g.camera.x;
+            const psy = p.y - g.camera.y;
+            if (psx >= -50 && psx <= viewW + 50 && psy >= -50 && psy <= viewH + 50) {
+              g.selectedPlanetIds.add(p.id);
+            }
+          }
+          g.lastClickTime = 0;
+          return;
+        }
+        g.lastClickTime = now;
+        g.lastClickPlanetId = clickedPlanet.id;
+      }
+
+      // Single click on planet
+      if (clickedPlanet && clickedPlanet.owner === 1) {
+        g.selectedUnitIds.clear();
+        g.selectedPlanetIds.clear();
+        g.selectedPlanetIds.add(clickedPlanet.id);
+      } else if (!clickedPlanet) {
+        // Starting box drag or deselect
+        g.selectedPlanetIds.clear();
+      }
+    }
+  }
+
+  function handleMouseMove(e) {
+    const g = G.current;
+    if (g.phase !== 'playing') return;
+
+    const canvas = canvasRef.current;
+    const cw = canvas ? canvas.width : window.innerWidth;
+    const ch = canvas ? canvas.height : window.innerHeight;
+    const sx = clamp(e.clientX, 0, cw);
+    const sy = clamp(e.clientY, 0, ch);
+    g.mouse.x = sx;
+    g.mouse.y = sy;
+
+    if (g.mouse.down) {
+      const dx = sx - g.mouse.dragSX;
+      const dy = sy - g.mouse.dragSY;
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+        g.mouse.isDragging = true;
+      }
+
+      if (g.isMinimapDragging) {
+        const wp = minimapToWorld(sx, sy);
+        const viewW2 = g.camera.w / g.camera.zoom;
+        const viewH2 = g.camera.h / g.camera.zoom;
+        g.camera.x = clamp(wp.x - viewW2 / 2, 0, Math.max(0, MAP_W - viewW2));
+        g.camera.y = clamp(wp.y - viewH2 / 2, 0, Math.max(0, MAP_H - viewH2));
+      }
+    }
+  }
+
+  function handleMouseUp(e) {
+    const g = G.current;
+    if (g.phase !== 'playing') return;
+
+    if (g.isMinimapDragging) {
+      g.isMinimapDragging = false;
+      g.mouse.down = false;
+      g.mouse.isDragging = false;
+      return;
+    }
+
+    if (e.button === 0 && g.mouse.isDragging && !g.isMinimapDragging) {
+      // Box select units
+      const cam = g.camera;
+      const x1 = Math.min(g.mouse.dragSX, g.mouse.x) / cam.zoom + cam.x;
+      const y1 = Math.min(g.mouse.dragSY, g.mouse.y) / cam.zoom + cam.y;
+      const x2 = Math.max(g.mouse.dragSX, g.mouse.x) / cam.zoom + cam.x;
+      const y2 = Math.max(g.mouse.dragSY, g.mouse.y) / cam.zoom + cam.y;
+
+      g.selectedUnitIds.clear();
+      g.selectedPlanetIds.clear();
+      for (const u of g.units) {
+        if (u.owner === 1 && u.x >= x1 && u.x <= x2 && u.y >= y1 && u.y <= y2) {
+          g.selectedUnitIds.add(u.id);
+        }
+      }
+    }
+
+    g.mouse.down = false;
+    g.mouse.isDragging = false;
+  }
+
+  function handleRightClick(e) {
+    e.preventDefault();
+    const g = G.current;
+    if (g.phase !== 'playing') return;
+
+    const sx = e.clientX;
+    const sy = e.clientY;
+    let wx, wy;
+
+    if (isOnMinimap(sx, sy)) {
+      const wp = minimapToWorld(sx, sy);
+      wx = wp.x;
+      wy = wp.y;
+    } else {
+      wx = sx / g.camera.zoom + g.camera.x;
+      wy = sy / g.camera.zoom + g.camera.y;
+    }
+
+    const targetPlanet = getPlanetAtWorld(wx, wy, g);
+
+    // If planets are selected => set rally point
+    if (g.selectedPlanetIds.size > 0) {
+      for (const pid of g.selectedPlanetIds) {
+        const p = g.planets.find(pl => pl.id === pid);
+        if (!p || p.owner !== 1) continue;
+        p.rallyPoint = { x: wx, y: wy };
+        p.rallyPointPlanetId = targetPlanet ? targetPlanet.id : null;
+
+        // Immediately dispatch idle units
+        for (const u of g.units) {
+          if (u.owner === 1 && u.homePlanetId === p.id && u.state === 'IDLE') {
+            u.state = 'MOVING';
+            u.homePlanetId = null;
+            u.targetX = wx;
+            u.targetY = wy;
+            u.targetPlanetId = targetPlanet ? targetPlanet.id : null;
+          }
+        }
+      }
+    }
+
+    // If units are selected => move/attack
+    if (g.selectedUnitIds.size > 0) {
+      // Spawn move marker particle
+      g.particles.push({
+        type: 'moveMarker',
+        x: wx, y: wy,
+        life: 0.8, maxLife: 0.8,
+        radius: 20,
+      });
+      for (const uid of g.selectedUnitIds) {
+        const u = g.units.find(unit => unit.id === uid);
+        if (!u || u.owner !== 1) continue;
+        u.state = 'MOVING';
+        u.homePlanetId = null;
+        u.targetX = wx;
+        u.targetY = wy;
+        u.targetPlanetId = targetPlanet ? targetPlanet.id : null;
+      }
+    }
+  }
+
+  function handleKeyDown(e) {
+    const g = G.current;
+    g.keys.add(e.code);
+
+    if (g.phase !== 'playing') return;
+
+    const digitMatch = e.code.match(/^Digit([1-4])$/);
+    if (digitMatch) {
+      const num = parseInt(digitMatch[1]);
+
+      // Control groups: Shift + 1-4 or Ctrl + 1-4 to assign
+      if (e.shiftKey || e.ctrlKey) {
+        e.preventDefault();
+        g.controlGroups[num] = new Set(g.selectedUnitIds);
+        return;
+      }
+
+      // Control groups: 1-4 to recall
+      const group = g.controlGroups[num];
+      if (group && group.size > 0) {
+        // Filter out dead units
+        const alive = new Set();
+        for (const id of group) {
+          if (g.units.some(u => u.id === id && u.hp > 0)) alive.add(id);
+        }
+        g.controlGroups[num] = alive;
+        if (alive.size > 0) {
+          g.selectedUnitIds = new Set(alive);
+          g.selectedPlanetIds.clear();
+        }
+      }
+    }
+  }
+
+  function handleKeyUp(e) {
+    G.current.keys.delete(e.code);
+  }
+
+  // ==================== UI ACTIONS ====================
+  const changeProduction = useCallback((type) => {
+    const g = G.current;
+    for (const pid of g.selectedPlanetIds) {
+      const p = g.planets.find(pl => pl.id === pid);
+      if (p && p.owner === 1) p.productionType = type;
+    }
+  }, []);
+
+  const upgradePlanets = useCallback(() => {
+    const g = G.current;
+    for (const pid of g.selectedPlanetIds) {
+      const p = g.planets.find(pl => pl.id === pid);
+      if (!p || p.owner !== 1) continue;
+      const cost = p.level * 50;
+      if (g.playerGold >= cost) {
+        g.playerGold -= cost;
+        p.level++;
+      }
+    }
+  }, []);
+
+  // ==================== SETUP (useEffect) ====================
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const g = G.current;
+    g.camera.w = canvas.width;
+    g.camera.h = canvas.height;
+
+    const ctx = canvas.getContext('2d');
+
+    // Generate background stars
+    g.stars = [];
+    for (let i = 0; i < 600; i++) {
+      g.stars.push({
+        x: Math.random() * (MAP_W + 1000),
+        y: Math.random() * (MAP_H + 600),
+        size: Math.random() * 2 + 0.5,
+        brightness: Math.random() * 0.6 + 0.2,
+        color: Math.random() > 0.9 ? '#aaccff' : Math.random() > 0.8 ? '#ffddaa' : '#ffffff',
+      });
+    }
+
+    // Event listeners
+    const onMD = (e) => handleMouseDown(e);
+    const onMM = (e) => handleMouseMove(e);
+    const onMU = (e) => handleMouseUp(e);
+    const onRC = (e) => handleRightClick(e);
+    const onKD = (e) => {
+      // Capture Ctrl+Digit for control groups before browser handles it
+      if (e.ctrlKey && /^Digit[1-4]$/.test(e.code)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      handleKeyDown(e);
+    };
+    const onKU = (e) => handleKeyUp(e);
+    const onWheel = (e) => {
+      e.preventDefault();
+      const g2 = G.current;
+      if (g2.phase !== 'playing') return;
+      const oldZoom = g2.camera.zoom;
+      if (e.deltaY < 0) g2.camera.zoom = Math.min(MAX_ZOOM, oldZoom + ZOOM_STEP);
+      else g2.camera.zoom = Math.max(MIN_ZOOM, oldZoom - ZOOM_STEP);
+      // Keep center stable
+      const cx = g2.camera.x + (g2.camera.w / oldZoom) / 2;
+      const cy = g2.camera.y + (g2.camera.h / oldZoom) / 2;
+      const newViewW = g2.camera.w / g2.camera.zoom;
+      const newViewH = g2.camera.h / g2.camera.zoom;
+      g2.camera.x = clamp(cx - newViewW / 2, 0, Math.max(0, MAP_W - newViewW));
+      g2.camera.y = clamp(cy - newViewH / 2, 0, Math.max(0, MAP_H - newViewH));
+    };
+    const onResize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      G.current.camera.w = canvas.width;
+      G.current.camera.h = canvas.height;
+    };
+
+    canvas.addEventListener('mousedown', onMD);
+    window.addEventListener('mousemove', onMM);
+    window.addEventListener('mouseup', onMU);
+    canvas.addEventListener('contextmenu', onRC);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('keydown', onKD, true);
+    window.addEventListener('keyup', onKU);
+    window.addEventListener('resize', onResize);
+
+    // Game loop
+    g.lastFrameTime = performance.now();
+
+    const gameLoop = (timestamp) => {
+      const dt = Math.min((timestamp - g.lastFrameTime) / 1000, 0.05);
+      g.lastFrameTime = timestamp;
+
+      if (g.phase === 'playing') {
+        update(dt);
+      }
+      render(ctx);
+
+      animFrameRef.current = requestAnimationFrame(gameLoop);
+    };
+
+    animFrameRef.current = requestAnimationFrame(gameLoop);
+
+    return () => {
+      cancelAnimationFrame(animFrameRef.current);
+      canvas.removeEventListener('mousedown', onMD);
+      window.removeEventListener('mousemove', onMM);
+      window.removeEventListener('mouseup', onMU);
+      canvas.removeEventListener('contextmenu', onRC);
+      canvas.removeEventListener('wheel', onWheel);
+      window.removeEventListener('keydown', onKD, true);
+      window.removeEventListener('keyup', onKU);
+      window.removeEventListener('resize', onResize);
+    };
+  }, []);
+
+  // ==================== JSX RENDER ====================
+  const selectedPlanetData = ui.selectedPlanets;
+  const hasSelectedPlanets = selectedPlanetData.length > 0;
+  const upgradeCost = hasSelectedPlanets ? selectedPlanetData[0].level * 50 : 0;
+  const currentProdType = hasSelectedPlanets ? selectedPlanetData[0].productionType : 1;
+
+  return (
+    <div className="w-screen h-screen relative overflow-hidden select-none" style={{userSelect:'none'}}>
+      <canvas ref={canvasRef} className="absolute top-0 left-0" />
+
+      {/* ---- START SCREEN ---- */}
+      {ui.phase === 'start' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center z-50"
+             style={{background: 'radial-gradient(ellipse at center, rgba(10,20,60,0.95), rgba(0,0,0,0.98))'}}>
+          <h1 className="text-6xl font-bold text-white mb-4 tracking-wider"
+              style={{textShadow: '0 0 30px rgba(68,153,255,0.6), 0 0 60px rgba(68,153,255,0.3)'}}>
+            SPACE BATTLE FLEET
+          </h1>
+          <p className="text-gray-400 text-lg mb-12">2D 실시간 우주 영토 점령 전략 시뮬레이션</p>
+          <button
+            onClick={initGame}
+            className="px-12 py-4 bg-blue-600 hover:bg-blue-500 text-white text-xl font-bold rounded-lg
+                       transition-all duration-200 hover:scale-105"
+            style={{boxShadow: '0 0 20px rgba(68,153,255,0.5)'}}>
+            게임 시작
+          </button>
+          <div className="mt-16 text-gray-500 text-sm text-center space-y-1 max-w-lg">
+            <p>WASD / 방향키: 카메라 이동 | 좌클릭: 행성/유닛 선택 | 우클릭: 이동/공격 명령</p>
+            <p>더블클릭: 화면 내 모든 아군 행성 선택 | 드래그: 유닛 범위 선택</p>
+            <p>Shift + 1~4: 부대 지정 | 1~4: 부대 호출</p>
+          </div>
+        </div>
+      )}
+
+      {/* ---- HUD ---- */}
+      {ui.phase === 'playing' && (
+        <>
+          {/* Resource display */}
+          <div className="absolute top-4 left-4 z-40 space-y-1">
+            <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-lg border border-white/10">
+              <span className="text-yellow-400 font-bold text-lg">
+                ⬡ {ui.playerGold} G
+              </span>
+              <span className="text-gray-400 mx-3">|</span>
+              <span className="text-blue-300 font-bold text-lg">
+                ♦ {ui.playerPop} / {MAX_POP}
+              </span>
+            </div>
+          </div>
+
+          {/* Selected units count */}
+          {ui.selectedUnitsCount > 0 && (
+            <div className="absolute top-4 right-[330px] z-40">
+              <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-lg border border-white/10">
+                <span className="text-green-300 font-bold text-lg">
+                  유닛 선택: {ui.selectedUnitsCount}기
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Control Groups UI */}
+          <div className="absolute bottom-4 left-4 z-40 flex gap-2">
+            {[1,2,3,4].map(num => {
+              const count = ui.controlGroupCounts[num];
+              return (
+                <button
+                  key={num}
+                  onClick={() => {
+                    const g = G.current;
+                    const group = g.controlGroups[num];
+                    if (group && group.size > 0) {
+                      const alive = new Set();
+                      for (const id of group) {
+                        if (g.units.some(u => u.id === id && u.hp > 0)) alive.add(id);
+                      }
+                      g.controlGroups[num] = alive;
+                      if (alive.size > 0) {
+                        g.selectedUnitIds = new Set(alive);
+                        g.selectedPlanetIds.clear();
+                      }
+                    }
+                  }}
+                  className={`w-14 h-14 rounded-lg border text-center flex flex-col items-center justify-center
+                    transition-all duration-150
+                    ${count > 0
+                      ? 'bg-blue-900/70 border-blue-400/50 hover:bg-blue-800/70'
+                      : 'bg-black/50 border-white/10 opacity-50'}`}>
+                  <span className="text-white font-bold text-lg leading-none">{num}</span>
+                  <span className={`text-xs leading-none mt-0.5 ${count > 0 ? 'text-blue-300' : 'text-gray-500'}`}>
+                    {count > 0 ? `${count}기` : '비어있음'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Control Panel (when planets selected) */}
+          {hasSelectedPlanets && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
+              <div className="bg-black/80 backdrop-blur-md px-6 py-4 rounded-xl border border-white/15
+                              flex items-center gap-6">
+                {/* Planet info */}
+                <div className="text-white">
+                  <div className="text-sm text-gray-400">선택된 행성</div>
+                  <div className="text-lg font-bold text-blue-300">
+                    {selectedPlanetData.length}개
+                    {selectedPlanetData.length === 1 && (
+                      <span className="text-sm font-normal text-gray-400 ml-2">
+                        HP: {Math.floor(selectedPlanetData[0].hp)}/{selectedPlanetData[0].maxHp}
+                        &nbsp;&nbsp;Lv: {selectedPlanetData[0].level}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="w-px h-10 bg-white/20" />
+
+                {/* Production buttons */}
+                <div className="flex gap-2">
+                  <span className="text-gray-400 text-sm mr-1 self-center">생산:</span>
+                  {[1, 2, 3].map(type => (
+                    <button
+                      key={type}
+                      onClick={() => changeProduction(type)}
+                      className={`px-4 py-2 rounded-lg text-sm font-bold transition-all
+                        ${currentProdType === type
+                          ? 'bg-blue-600 text-white ring-2 ring-blue-400'
+                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>
+                      {type === 1 ? '▲ 요격기' : type === 2 ? '■ 구축함' : '● 전함'}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="w-px h-10 bg-white/20" />
+
+                {/* Upgrade button */}
+                <button
+                  onClick={upgradePlanets}
+                  disabled={ui.playerGold < upgradeCost}
+                  className={`px-5 py-2 rounded-lg text-sm font-bold transition-all
+                    ${ui.playerGold >= upgradeCost
+                      ? 'bg-yellow-600 hover:bg-yellow-500 text-white'
+                      : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
+                  레벨 업그레이드 ({upgradeCost}G)
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ---- GAME OVER SCREEN ---- */}
+      {ui.phase === 'gameover' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center z-50 bg-black/80">
+          <h1
+            className={`text-8xl font-black mb-8 ${ui.gameResult === 'victory' ? 'text-blue-400' : 'text-red-500'}`}
+            style={{textShadow: ui.gameResult === 'victory'
+              ? '0 0 40px rgba(68,153,255,0.8)' : '0 0 40px rgba(255,68,85,0.8)'}}>
+            {ui.gameResult === 'victory' ? 'VICTORY' : 'DEFEAT'}
+          </h1>
+          <p className="text-gray-400 text-xl mb-12">
+            {ui.gameResult === 'victory' ? '우주를 통일하였습니다!' : '모든 행성을 잃었습니다...'}
+          </p>
+          <button
+            onClick={initGame}
+            className="px-12 py-4 bg-blue-600 hover:bg-blue-500 text-white text-xl font-bold rounded-lg
+                       transition-all duration-200 hover:scale-105"
+            style={{boxShadow: '0 0 20px rgba(68,153,255,0.5)'}}>
+            다시 시작
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ==================== MOUNT ====================
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+  </script>
+</body>
+</html>
