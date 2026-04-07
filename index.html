@@ -450,6 +450,10 @@ const App = () => {
   }
 
   function capturePlanet(planet, newOwner, g) {
+    // Gold reward based on planet level before reset
+    if (newOwner === 1) {
+      g.playerGold += planet.level * 20;
+    }
     planet.owner = newOwner;
     planet.hp = planet.maxHp;
     planet.level = 1;
@@ -711,6 +715,23 @@ const App = () => {
         ctx.font = '10px sans-serif';
         ctx.fillStyle = 'rgba(255,255,255,0.6)';
         ctx.fillText(UNIT_STATS[p.productionType].name, p.x, p.y + p.radius + 12);
+
+        // Production progress gauge
+        const pStats = UNIT_STATS[p.productionType];
+        const reduction = Math.min(0.9, 0.1 * (p.level - 1));
+        const adjSpawnTime = pStats.spawnTime * (1 - reduction);
+        const progress = Math.min(1, p.spawnTimer / adjSpawnTime);
+        const pgW = 36;
+        const pgH = 4;
+        const pgX = p.x - pgW / 2;
+        const pgY = p.y + p.radius + 19;
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(pgX, pgY, pgW, pgH);
+        ctx.fillStyle = colors.light;
+        ctx.fillRect(pgX, pgY, pgW * progress, pgH);
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(pgX, pgY, pgW, pgH);
       }
     }
 
