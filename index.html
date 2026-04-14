@@ -13,6 +13,33 @@
     body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
     canvas { display: block; }
     ::-webkit-scrollbar { display: none; }
+
+    @keyframes starField {
+      0% { transform: translateY(0); }
+      100% { transform: translateY(-50%); }
+    }
+    @keyframes fadeSlideUp {
+      0% { opacity: 0; transform: translateY(30px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes planetGlow {
+      0%, 100% { box-shadow: -30px -10px 60px rgba(40,120,200,0.15), inset -20px -10px 40px rgba(0,0,0,0.6); }
+      50% { box-shadow: -30px -10px 80px rgba(50,140,220,0.2), inset -20px -10px 40px rgba(0,0,0,0.6); }
+    }
+    @keyframes lineExpand {
+      0% { width: 0; opacity: 0; }
+      100% { width: 100%; opacity: 1; }
+    }
+    @keyframes btnIdle {
+      0%, 100% { border-color: rgba(80,200,160,0.3); }
+      50% { border-color: rgba(80,200,160,0.6); }
+    }
+    @keyframes shipFly {
+      0% { transform: translateX(100vw); opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { transform: translateX(-100vw); opacity: 0; }
+    }
   </style>
 </head>
 <body>
@@ -47,6 +74,8 @@ const UNIT_STATS = {
   2: { name: '구축함', hp: 80, atk: 15, speed: 80, spawnTime: 4.8, radius: 9, pop: 2, gold: 2, shape: 'square' },
   3: { name: '전함', hp: 200, atk: 40, speed: 40, spawnTime: 7.2, radius: 14, pop: 3, gold: 3, shape: 'circle' },
 };
+
+const ENEMY_UNIT_NAMES = { 1: '맹독충', 2: '칼날벌레', 3: '거대갑충' };
 
 const FACTION_COLORS = {
   0: { main: '#888888', light: '#aaaaaa', dark: '#555555', glow: 'rgba(136,136,136,0.3)' },
@@ -198,6 +227,8 @@ const App = () => {
       targetX: null, targetY: null,
       attackCooldown: 0,
       attackTargetId: null,
+      attackAnim: 0,
+      attackAngle: 0,
     };
 
     if (planet.owner === 1) g.playerPop += stats.pop;
@@ -298,6 +329,7 @@ const App = () => {
     // Per-unit update
     for (const u of g.units) {
       u.attackCooldown -= dt;
+      if (u.attackAnim > 0) u.attackAnim = Math.max(0, u.attackAnim - dt * 4);
 
       // Find attack target (prioritize enemy units, then planets)
       let atkTarget = null;
@@ -335,6 +367,11 @@ const App = () => {
       // Attack if target found
       if (atkTarget && u.attackCooldown <= 0) {
         u.attackCooldown = 0.5;
+        u.attackAnim = 1.0;
+        u.attackAngle = Math.atan2(
+          (atkType === 'unit' ? atkTarget.y : atkTarget.y) - u.y,
+          (atkType === 'unit' ? atkTarget.x : atkTarget.x) - u.x
+        );
         if (atkType === 'unit') {
           atkTarget.hp -= UNIT_STATS[u.type].atk;
           if (atkTarget.hp <= 0) {
@@ -661,24 +698,199 @@ const App = () => {
       if (sx < -80 || sx > viewW + 80 || sy < -80 || sy > viewH + 80) continue;
 
       const colors = FACTION_COLORS[p.owner];
+      const R = p.radius;
+      const px = p.x;
+      const py = p.y;
+      const seed = (p.id.charCodeAt(1) || 0) * 137;
 
-      // Glow
-      ctx.shadowColor = colors.glow;
-      ctx.shadowBlur = 25;
-      ctx.fillStyle = colors.dark;
+      // Clip to circle for planet surface
+      ctx.save();
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
+      ctx.arc(px, py, R, 0, Math.PI * 2);
+      ctx.clip();
 
-      // Surface
-      const gradient = ctx.createRadialGradient(p.x - 5, p.y - 5, 2, p.x, p.y, p.radius);
-      gradient.addColorStop(0, colors.light);
-      gradient.addColorStop(1, colors.dark);
-      ctx.fillStyle = gradient;
+      if (p.owner === 1) {
+        // ---- Player Planet: Teal ocean, green/purple continents, white clouds ----
+        // Outer glow
+        ctx.shadowColor = 'rgba(60,200,180,0.5)';
+        ctx.shadowBlur = 25;
+
+        // Ocean base
+        const oceanGrad = ctx.createRadialGradient(px - R * 0.3, py - R * 0.3, R * 0.1, px, py, R);
+        oceanGrad.addColorStop(0, '#5ee8c5');
+        oceanGrad.addColorStop(0.5, '#2db8a0');
+        oceanGrad.addColorStop(1, '#1a7a6d');
+        ctx.fillStyle = oceanGrad;
+        ctx.fillRect(px - R, py - R, R * 2, R * 2);
+        ctx.shadowBlur = 0;
+
+        // Continents (procedural patches)
+        const continents = [
+          { cx: -0.3, cy: -0.2, rx: 0.45, ry: 0.35, color: '#7a5d8a' },
+          { cx: 0.25, cy: 0.15, rx: 0.35, ry: 0.4, color: '#5a8a4a' },
+          { cx: -0.1, cy: 0.35, rx: 0.3, ry: 0.2, color: '#8a6d7a' },
+          { cx: 0.35, cy: -0.35, rx: 0.25, ry: 0.2, color: '#6a9a5a' },
+          { cx: -0.4, cy: 0.1, rx: 0.2, ry: 0.3, color: '#5a7a4a' },
+        ];
+        for (const c of continents) {
+          ctx.fillStyle = c.color;
+          ctx.beginPath();
+          ctx.ellipse(px + c.cx * R, py + c.cy * R, c.rx * R, c.ry * R, (seed + c.cx * 100) % Math.PI, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Cloud swirls
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        const clouds = [
+          { cx: 0.2, cy: -0.25, rx: 0.35, ry: 0.08 },
+          { cx: -0.15, cy: 0.3, rx: 0.4, ry: 0.1 },
+          { cx: 0.1, cy: 0.05, rx: 0.3, ry: 0.06 },
+          { cx: -0.3, cy: -0.1, rx: 0.25, ry: 0.07 },
+        ];
+        for (const cl of clouds) {
+          ctx.beginPath();
+          ctx.ellipse(px + cl.cx * R, py + cl.cy * R, cl.rx * R, cl.ry * R, (seed * 0.5) % Math.PI, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = 'rgba(255,255,255,0.2)';
+        ctx.beginPath();
+        ctx.ellipse(px + 0.15 * R, py + 0.35 * R, 0.28 * R, 0.12 * R, 0.8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Atmosphere rim
+        const atmGrad = ctx.createRadialGradient(px, py, R * 0.85, px, py, R);
+        atmGrad.addColorStop(0, 'rgba(100,230,220,0)');
+        atmGrad.addColorStop(1, 'rgba(100,230,220,0.3)');
+        ctx.fillStyle = atmGrad;
+        ctx.fillRect(px - R, py - R, R * 2, R * 2);
+
+      } else if (p.owner === 2) {
+        // ---- Enemy Planet: Olive/yellow-green with brown patches ----
+        ctx.shadowColor = 'rgba(150,160,80,0.3)';
+        ctx.shadowBlur = 15;
+
+        // Yellow-green base
+        const neutralGrad = ctx.createRadialGradient(px - R * 0.25, py - R * 0.2, R * 0.05, px, py, R);
+        neutralGrad.addColorStop(0, '#b8c060');
+        neutralGrad.addColorStop(0.5, '#8a9a40');
+        neutralGrad.addColorStop(1, '#5a6830');
+        ctx.fillStyle = neutralGrad;
+        ctx.fillRect(px - R, py - R, R * 2, R * 2);
+        ctx.shadowBlur = 0;
+
+        // Brown terrain patches
+        const patches = [
+          { cx: -0.15, cy: 0.1, rx: 0.3, ry: 0.25 },
+          { cx: 0.25, cy: -0.2, rx: 0.2, ry: 0.3 },
+          { cx: 0.05, cy: 0.3, rx: 0.25, ry: 0.15 },
+        ];
+        for (const pt of patches) {
+          ctx.fillStyle = 'rgba(140,110,70,0.4)';
+          ctx.beginPath();
+          ctx.ellipse(px + pt.cx * R, py + pt.cy * R, pt.rx * R, pt.ry * R, seed % Math.PI, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Subtle darker spots
+        ctx.fillStyle = 'rgba(100,80,50,0.25)';
+        ctx.beginPath();
+        ctx.arc(px + R * 0.15, py - R * 0.1, R * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(px - R * 0.25, py + R * 0.2, R * 0.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Lighting gradient
+        const lightGrad = ctx.createRadialGradient(px - R * 0.3, py - R * 0.3, 0, px, py, R);
+        lightGrad.addColorStop(0, 'rgba(255,255,200,0.15)');
+        lightGrad.addColorStop(0.5, 'rgba(0,0,0,0)');
+        lightGrad.addColorStop(1, 'rgba(0,0,0,0.3)');
+        ctx.fillStyle = lightGrad;
+        ctx.fillRect(px - R, py - R, R * 2, R * 2);
+
+      } else {
+        // ---- Neutral Planet: Dark rocky/volcanic with reddish glow ----
+        ctx.shadowColor = 'rgba(255,100,60,0.5)';
+        ctx.shadowBlur = 25;
+
+        // Dark base
+        const rockGrad = ctx.createRadialGradient(px - R * 0.25, py - R * 0.25, R * 0.05, px + R * 0.1, py + R * 0.1, R);
+        rockGrad.addColorStop(0, '#c8b0a0');
+        rockGrad.addColorStop(0.3, '#8a7060');
+        rockGrad.addColorStop(0.6, '#5a4540');
+        rockGrad.addColorStop(1, '#2a1a18');
+        ctx.fillStyle = rockGrad;
+        ctx.fillRect(px - R, py - R, R * 2, R * 2);
+        ctx.shadowBlur = 0;
+
+        // Craters and rocky terrain
+        const craters = [
+          { cx: -0.2, cy: -0.15, r: 0.18 },
+          { cx: 0.3, cy: 0.2, r: 0.15 },
+          { cx: 0.05, cy: -0.35, r: 0.12 },
+          { cx: -0.35, cy: 0.25, r: 0.1 },
+          { cx: 0.25, cy: -0.1, r: 0.13 },
+        ];
+        for (const cr of craters) {
+          const cGrad = ctx.createRadialGradient(
+            px + cr.cx * R - cr.r * R * 0.2, py + cr.cy * R - cr.r * R * 0.2, 0,
+            px + cr.cx * R, py + cr.cy * R, cr.r * R
+          );
+          cGrad.addColorStop(0, 'rgba(180,150,130,0.3)');
+          cGrad.addColorStop(0.5, 'rgba(80,60,50,0.3)');
+          cGrad.addColorStop(1, 'rgba(40,25,20,0.4)');
+          ctx.fillStyle = cGrad;
+          ctx.beginPath();
+          ctx.arc(px + cr.cx * R, py + cr.cy * R, cr.r * R, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Rocky ridges
+        ctx.strokeStyle = 'rgba(120,90,70,0.25)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(px - R * 0.4, py - R * 0.1);
+        ctx.quadraticCurveTo(px, py - R * 0.3, px + R * 0.35, py + R * 0.05);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(px - R * 0.2, py + R * 0.3);
+        ctx.quadraticCurveTo(px + R * 0.1, py + R * 0.15, px + R * 0.4, py + R * 0.35);
+        ctx.stroke();
+
+        // Shadow (half planet in darkness)
+        const shadowGrad = ctx.createLinearGradient(px - R * 0.3, py - R, px + R, py + R);
+        shadowGrad.addColorStop(0, 'rgba(0,0,0,0)');
+        shadowGrad.addColorStop(0.45, 'rgba(0,0,0,0.1)');
+        shadowGrad.addColorStop(1, 'rgba(0,0,0,0.65)');
+        ctx.fillStyle = shadowGrad;
+        ctx.fillRect(px - R, py - R, R * 2, R * 2);
+
+        // Reddish ambient glow at edge
+        const redRim = ctx.createRadialGradient(px, py, R * 0.8, px, py, R);
+        redRim.addColorStop(0, 'rgba(0,0,0,0)');
+        redRim.addColorStop(1, 'rgba(200,80,40,0.25)');
+        ctx.fillStyle = redRim;
+        ctx.fillRect(px - R, py - R, R * 2, R * 2);
+      }
+
+      // Spherical shading (shared for all)
+      const sphereShade = ctx.createRadialGradient(px - R * 0.3, py - R * 0.3, R * 0.05, px, py, R);
+      sphereShade.addColorStop(0, 'rgba(255,255,255,0.15)');
+      sphereShade.addColorStop(0.4, 'rgba(255,255,255,0)');
+      sphereShade.addColorStop(1, 'rgba(0,0,0,0.2)');
+      ctx.fillStyle = sphereShade;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.arc(px, py, R, 0, Math.PI * 2);
       ctx.fill();
+
+      ctx.restore(); // end clip
+
+      // Planet outline
+      ctx.strokeStyle = colors.light;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px, py, R, 0, Math.PI * 2);
+      ctx.stroke();
 
       // Selection ring
       if (g.selectedPlanetIds.has(p.id)) {
@@ -714,7 +926,7 @@ const App = () => {
       if (p.owner !== 0) {
         ctx.font = '10px sans-serif';
         ctx.fillStyle = 'rgba(255,255,255,0.6)';
-        ctx.fillText(UNIT_STATS[p.productionType].name, p.x, p.y + p.radius + 12);
+        ctx.fillText(p.owner === 2 ? ENEMY_UNIT_NAMES[p.productionType] : UNIT_STATS[p.productionType].name, p.x, p.y + p.radius + 12);
 
         // Production progress gauge
         const pStats = UNIT_STATS[p.productionType];
@@ -750,35 +962,777 @@ const App = () => {
       ctx.strokeStyle = selected ? '#ffffff' : colors.light;
       ctx.lineWidth = selected ? 2 : 1;
 
-      if (u.type === 1) {
-        // Triangle (interceptor) - pointing in movement direction
+      const anim = u.attackAnim || 0;
+
+      // ===================== ZERG-STYLE ENEMY UNITS =====================
+      if (u.owner === 2) {
+        const angle = (u.vx !== 0 || u.vy !== 0) ? Math.atan2(u.vy, u.vx) : (u.attackAngle || 0);
+        const t = performance.now() * 0.001;
+
+        if (u.type === 1) {
+          // === Baneling-style: round spiky body, orange glowing core, front claws, trailing tentacles ===
+          const lunge = anim > 0.5 ? (anim - 0.5) * 2 * 5 : 0;
+          ctx.save();
+          ctx.translate(u.x + Math.cos(angle) * lunge, u.y + Math.sin(angle) * lunge);
+          ctx.rotate(angle);
+
+          // Trailing tentacles (2-3 wisps behind)
+          ctx.strokeStyle = '#4a2050';
+          ctx.lineWidth = 1.2;
+          for (let i = 0; i < 3; i++) {
+            const tw = Math.sin(t * 6 + i * 2.1) * r * 0.25;
+            const tw2 = Math.sin(t * 5 + i * 1.7) * r * 0.15;
+            ctx.beginPath();
+            ctx.moveTo(-r * 0.6, (i - 1) * r * 0.2);
+            ctx.quadraticCurveTo(-r * 1.0, (i - 1) * r * 0.2 + tw, -r * 1.4 - i * r * 0.15, (i - 1) * r * 0.25 + tw2);
+            ctx.stroke();
+          }
+
+          // Legs/claws (3 pairs, scythe-like)
+          ctx.fillStyle = '#5a3040';
+          ctx.strokeStyle = '#3a1a28';
+          ctx.lineWidth = 1;
+          for (let i = -1; i <= 1; i++) {
+            const legWiggle = Math.sin(t * 10 + i * 2) * 0.15;
+            // Top claws
+            ctx.beginPath();
+            ctx.moveTo(i * r * 0.3, -r * 0.4);
+            ctx.quadraticCurveTo(i * r * 0.3 - r * 0.2, -r * 0.8 + legWiggle * r, i * r * 0.3 + r * 0.1, -r * 0.9 + legWiggle * r);
+            ctx.lineTo(i * r * 0.3, -r * 0.5);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            // Bottom claws
+            ctx.beginPath();
+            ctx.moveTo(i * r * 0.3, r * 0.4);
+            ctx.quadraticCurveTo(i * r * 0.3 - r * 0.2, r * 0.8 - legWiggle * r, i * r * 0.3 + r * 0.1, r * 0.9 - legWiggle * r);
+            ctx.lineTo(i * r * 0.3, r * 0.5);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          }
+
+          // Spikes radiating from body
+          ctx.fillStyle = '#3a2030';
+          const spikeCount = 7;
+          for (let i = 0; i < spikeCount; i++) {
+            const sa = (Math.PI * 0.4) + (Math.PI * 1.2 / spikeCount) * i;
+            const sLen = r * (0.4 + Math.sin(i * 1.7) * 0.15);
+            ctx.save();
+            ctx.rotate(sa - Math.PI * 0.5);
+            ctx.beginPath();
+            ctx.moveTo(-r * 0.08, -r * 0.35);
+            ctx.lineTo(0, -r * 0.35 - sLen);
+            ctx.lineTo(r * 0.08, -r * 0.35);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+          }
+
+          // Main body (round, bulbous)
+          ctx.fillStyle = '#8a3050';
+          ctx.beginPath();
+          ctx.arc(0, 0, r * 0.6, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Carapace dark overlay
+          ctx.fillStyle = '#6a2540';
+          ctx.beginPath();
+          ctx.ellipse(-r * 0.1, 0, r * 0.5, r * 0.55, 0, Math.PI * 0.7, Math.PI * 2.3);
+          ctx.fill();
+
+          // Glowing orange core (pulsing)
+          const corePulse = 0.7 + Math.sin(t * 4) * 0.15 + (anim > 0 ? anim * 0.3 : 0);
+          const coreGrad = ctx.createRadialGradient(r * 0.05, 0, 0, r * 0.05, 0, r * 0.4);
+          coreGrad.addColorStop(0, `rgba(255,200,50,${corePulse})`);
+          coreGrad.addColorStop(0.4, `rgba(255,140,30,${corePulse * 0.7})`);
+          coreGrad.addColorStop(1, 'rgba(200,60,20,0)');
+          ctx.fillStyle = coreGrad;
+          ctx.beginPath();
+          ctx.arc(r * 0.05, 0, r * 0.4, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Core bright center
+          ctx.fillStyle = `rgba(255,230,150,${corePulse * 0.8})`;
+          ctx.beginPath();
+          ctx.arc(r * 0.05, 0, r * 0.15, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Front mandibles/claws (snap on attack)
+          const clawOpen = anim > 0.5 ? 0.2 + (anim - 0.5) * 2 * 0.4 : 0.2;
+          ctx.fillStyle = '#5a2838';
+          ctx.strokeStyle = '#3a1520';
+          ctx.lineWidth = 1;
+          // Upper claw
+          ctx.beginPath();
+          ctx.moveTo(r * 0.45, -r * 0.1);
+          ctx.quadraticCurveTo(r * 0.9, -r * clawOpen * 1.5, r * 1.1, -r * clawOpen * 0.5);
+          ctx.lineTo(r * 0.8, -r * 0.05);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          // Lower claw
+          ctx.beginPath();
+          ctx.moveTo(r * 0.45, r * 0.1);
+          ctx.quadraticCurveTo(r * 0.9, r * clawOpen * 1.5, r * 1.1, r * clawOpen * 0.5);
+          ctx.lineTo(r * 0.8, r * 0.05);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // Head/face
+          ctx.fillStyle = '#7a2845';
+          ctx.beginPath();
+          ctx.ellipse(r * 0.45, 0, r * 0.2, r * 0.18, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Eyes (yellow glow)
+          const eyeGlow = anim > 0 ? 1 : 0.6;
+          ctx.fillStyle = `rgba(255,210,50,${eyeGlow})`;
+          ctx.beginPath();
+          ctx.arc(r * 0.5, -r * 0.08, r * 0.06, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(r * 0.5, r * 0.08, r * 0.06, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Explosion/acid burst on attack
+          if (anim > 0.5) {
+            const burst = (anim - 0.5) * 2;
+            ctx.fillStyle = `rgba(255,180,30,${burst * 0.6})`;
+            ctx.beginPath();
+            ctx.arc(r * 1.0, 0, r * 0.5 * burst, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = `rgba(120,255,50,${burst * 0.4})`;
+            ctx.beginPath();
+            ctx.arc(r * 1.0, 0, r * 0.3 * burst, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          if (selected) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(0, 0, r * 0.85, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.restore();
+
+        } else if (u.type === 2) {
+          // === Hydralisk-style: long serpentine body, large scythe claws, purple hood/wings, pustules ===
+          const moveAngle = (u.vx !== 0 || u.vy !== 0) ? Math.atan2(u.vy, u.vx) : (u.attackAngle || 0);
+          const strikeF = anim > 0.5 ? (anim - 0.5) * 2 : 0;
+
+          ctx.save();
+          ctx.translate(u.x, u.y);
+          ctx.rotate(moveAngle);
+
+          // Tail/body segments (serpentine wave)
+          for (let i = 4; i >= 1; i--) {
+            const wave = Math.sin(t * 7 + i * 1.4) * r * 0.12;
+            const segR = r * (0.3 - i * 0.03);
+            ctx.fillStyle = i % 2 === 0 ? '#8a2858' : '#7a2050';
+            ctx.beginPath();
+            ctx.ellipse(-r * 0.3 * i, wave, r * 0.22, segR, 0, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // Pustules/eyes along body
+          ctx.fillStyle = 'rgba(200,150,100,0.5)';
+          for (let i = 1; i <= 3; i++) {
+            const pw = Math.sin(t * 7 + i * 1.4) * r * 0.12;
+            ctx.beginPath();
+            ctx.arc(-r * 0.3 * i + r * 0.05, pw + r * 0.15, r * 0.06, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(-r * 0.3 * i + r * 0.05, pw - r * 0.15, r * 0.06, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // Main thorax
+          ctx.fillStyle = '#9a3060';
+          ctx.beginPath();
+          ctx.ellipse(0, 0, r * 0.55, r * 0.45, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Carapace bumpy texture
+          ctx.fillStyle = '#aa3868';
+          ctx.beginPath();
+          ctx.ellipse(r * 0.05, -r * 0.05, r * 0.35, r * 0.25, -0.2, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Purple hood/wings (large, extending upward & backward)
+          ctx.fillStyle = '#7a30a0';
+          // Upper wing
+          ctx.beginPath();
+          ctx.moveTo(r * 0.1, -r * 0.35);
+          ctx.quadraticCurveTo(-r * 0.3, -r * 1.1, -r * 0.9, -r * 0.8);
+          ctx.quadraticCurveTo(-r * 0.5, -r * 0.5, -r * 0.1, -r * 0.35);
+          ctx.closePath();
+          ctx.fill();
+          // Lower wing
+          ctx.beginPath();
+          ctx.moveTo(r * 0.1, r * 0.35);
+          ctx.quadraticCurveTo(-r * 0.3, r * 1.1, -r * 0.9, r * 0.8);
+          ctx.quadraticCurveTo(-r * 0.5, r * 0.5, -r * 0.1, r * 0.35);
+          ctx.closePath();
+          ctx.fill();
+
+          // Wing membrane veins
+          ctx.strokeStyle = 'rgba(120,40,160,0.5)';
+          ctx.lineWidth = 0.7;
+          ctx.beginPath();
+          ctx.moveTo(0, -r * 0.4);
+          ctx.quadraticCurveTo(-r * 0.4, -r * 0.9, -r * 0.7, -r * 0.75);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(0, r * 0.4);
+          ctx.quadraticCurveTo(-r * 0.4, r * 0.9, -r * 0.7, r * 0.75);
+          ctx.stroke();
+
+          // Head
+          ctx.fillStyle = '#8a2850';
+          ctx.beginPath();
+          ctx.ellipse(r * 0.45, 0, r * 0.22, r * 0.2, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Scythe claws (large, curving inward — slash on attack)
+          const slashAngle = anim > 0.3 ? (anim - 0.3) * 1.43 * 0.5 : 0;
+          ctx.fillStyle = '#b8a080';
+          ctx.strokeStyle = '#8a6850';
+          ctx.lineWidth = 1;
+          // Upper scythe
+          ctx.save();
+          ctx.rotate(-slashAngle);
+          ctx.beginPath();
+          ctx.moveTo(r * 0.35, -r * 0.2);
+          ctx.quadraticCurveTo(r * 0.8, -r * 0.7, r * 1.2, -r * 0.3);
+          ctx.quadraticCurveTo(r * 1.0, -r * 0.15, r * 0.7, -r * 0.1);
+          ctx.lineTo(r * 0.35, -r * 0.12);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+          // Lower scythe
+          ctx.save();
+          ctx.rotate(slashAngle);
+          ctx.beginPath();
+          ctx.moveTo(r * 0.35, r * 0.2);
+          ctx.quadraticCurveTo(r * 0.8, r * 0.7, r * 1.2, r * 0.3);
+          ctx.quadraticCurveTo(r * 1.0, r * 0.15, r * 0.7, r * 0.1);
+          ctx.lineTo(r * 0.35, r * 0.12);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+
+          // Fangs
+          ctx.fillStyle = '#ddccaa';
+          ctx.beginPath();
+          ctx.moveTo(r * 0.55, -r * 0.08);
+          ctx.lineTo(r * 0.75, -r * 0.15);
+          ctx.lineTo(r * 0.6, 0);
+          ctx.closePath();
+          ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(r * 0.55, r * 0.08);
+          ctx.lineTo(r * 0.75, r * 0.15);
+          ctx.lineTo(r * 0.6, 0);
+          ctx.closePath();
+          ctx.fill();
+
+          // Eyes (yellow-green)
+          const eyeGlow = anim > 0 ? 1 : 0.7;
+          ctx.fillStyle = `rgba(220,200,40,${eyeGlow})`;
+          ctx.beginPath();
+          ctx.arc(r * 0.5, -r * 0.1, r * 0.05, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(r * 0.5, r * 0.1, r * 0.05, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Acid spit / slash effect on attack
+          if (anim > 0.4) {
+            const af = (anim - 0.4) * 1.67;
+            // Slash arc
+            ctx.strokeStyle = `rgba(180,255,80,${af * 0.8})`;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(r * 0.8, 0, r * 0.6, -Math.PI * 0.4 * af, Math.PI * 0.4 * af);
+            ctx.stroke();
+            // Green acid drip
+            ctx.fillStyle = `rgba(100,255,60,${af * 0.5})`;
+            ctx.beginPath();
+            ctx.arc(r * 1.1, 0, r * 0.15 * af, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          if (selected) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.ellipse(0, 0, r * 0.8, r * 0.6, 0, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.restore();
+
+        } else {
+          // === Ultralisk-style: massive armored beast, brown carapace, purple sacs, huge front claws, back spikes ===
+          const angle2 = (u.vx !== 0 || u.vy !== 0) ? Math.atan2(u.vy, u.vx) : (u.attackAngle || 0);
+          const smash = anim > 0.5 ? (anim - 0.5) * 2 * 4 : 0;
+
+          ctx.save();
+          ctx.translate(u.x, u.y);
+          ctx.rotate(angle2);
+
+          // Ground shockwave on attack
+          if (anim > 0) {
+            const shockR = r * (1.3 + anim * 1.2);
+            ctx.strokeStyle = `rgba(200,100,255,${anim * 0.3})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(0, 0, shockR, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+
+          // Heavy legs (3 pairs, thick jointed)
+          const legPhase = t * 3.5;
+          ctx.fillStyle = '#6a4530';
+          ctx.strokeStyle = '#4a2a18';
+          ctx.lineWidth = 1;
+          for (let i = -1; i <= 1; i++) {
+            const lx = i * r * 0.4;
+            const legMove = Math.sin(legPhase + i * 1.5) * r * 0.06;
+            // Upper legs
+            ctx.beginPath();
+            ctx.moveTo(lx, -r * 0.55);
+            ctx.lineTo(lx - r * 0.1, -r * 0.85 + legMove);
+            ctx.lineTo(lx - r * 0.2, -r * 1.0 + legMove);
+            ctx.lineTo(lx + r * 0.05, -r * 0.9 + legMove);
+            ctx.lineTo(lx + r * 0.1, -r * 0.6);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            // Lower legs
+            ctx.beginPath();
+            ctx.moveTo(lx, r * 0.55);
+            ctx.lineTo(lx - r * 0.1, r * 0.85 - legMove);
+            ctx.lineTo(lx - r * 0.2, r * 1.0 - legMove);
+            ctx.lineTo(lx + r * 0.05, r * 0.9 - legMove);
+            ctx.lineTo(lx + r * 0.1, r * 0.6);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          }
+
+          // Main body (massive, elongated)
+          ctx.fillStyle = '#8a6540';
+          ctx.beginPath();
+          ctx.ellipse(0, 0, r * 0.95, r * 0.6, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Brown carapace armor plates
+          ctx.fillStyle = '#9a7550';
+          ctx.beginPath();
+          ctx.ellipse(-r * 0.15, 0, r * 0.75, r * 0.55, 0, 0, Math.PI * 2);
+          ctx.fill();
+          // Carapace ridge lines
+          ctx.strokeStyle = 'rgba(120,80,40,0.4)';
+          ctx.lineWidth = 0.8;
+          for (let i = -2; i <= 1; i++) {
+            ctx.beginPath();
+            ctx.ellipse(i * r * 0.2, 0, r * 0.08, r * 0.52, 0, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+
+          // Purple energy sacs (glowing, on back)
+          const sacPulse = 0.6 + Math.sin(t * 3) * 0.2 + (anim > 0 ? anim * 0.2 : 0);
+          const sacPositions = [
+            { x: -r * 0.35, y: -r * 0.25, s: r * 0.18 },
+            { x: -r * 0.1, y: -r * 0.35, s: r * 0.22 },
+            { x: -r * 0.5, y: 0, s: r * 0.15 },
+            { x: -r * 0.15, y: r * 0.3, s: r * 0.2 },
+            { x: -r * 0.4, y: r * 0.2, s: r * 0.14 },
+            { x: 0.05 * r, y: -r * 0.15, s: r * 0.12 },
+          ];
+          for (const sac of sacPositions) {
+            const sacGrad = ctx.createRadialGradient(sac.x, sac.y, 0, sac.x, sac.y, sac.s);
+            sacGrad.addColorStop(0, `rgba(200,120,255,${sacPulse})`);
+            sacGrad.addColorStop(0.6, `rgba(140,50,200,${sacPulse * 0.6})`);
+            sacGrad.addColorStop(1, 'rgba(80,20,120,0)');
+            ctx.fillStyle = sacGrad;
+            ctx.beginPath();
+            ctx.arc(sac.x, sac.y, sac.s, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // Green pustule dots on sacs
+          ctx.fillStyle = `rgba(180,220,80,${sacPulse * 0.7})`;
+          ctx.beginPath();
+          ctx.arc(-r * 0.1, -r * 0.33, r * 0.05, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(-r * 0.35, -r * 0.2, r * 0.04, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(-r * 0.15, r * 0.28, r * 0.04, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Back spikes (large, horn-like)
+          ctx.fillStyle = '#5a3a20';
+          ctx.strokeStyle = '#3a2010';
+          ctx.lineWidth = 0.8;
+          const spikes = [
+            { x: -r * 0.5, a: -2.2, l: r * 0.55 },
+            { x: -r * 0.3, a: -2.0, l: r * 0.7 },
+            { x: -r * 0.1, a: -1.8, l: r * 0.6 },
+            { x: 0.1 * r, a: -1.6, l: r * 0.45 },
+            { x: -r * 0.5, a: 2.2, l: r * 0.5 },
+            { x: -r * 0.3, a: 2.0, l: r * 0.65 },
+            { x: -r * 0.1, a: 1.8, l: r * 0.55 },
+            { x: 0.1 * r, a: 1.6, l: r * 0.4 },
+          ];
+          for (const sp of spikes) {
+            const tipX = sp.x + Math.cos(sp.a) * sp.l;
+            const tipY = Math.sin(sp.a) * sp.l;
+            ctx.beginPath();
+            ctx.moveTo(sp.x - r * 0.05, Math.sin(sp.a) * r * 0.15);
+            ctx.lineTo(tipX, tipY);
+            ctx.lineTo(sp.x + r * 0.05, Math.sin(sp.a) * r * 0.1);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          }
+
+          // Head (front, smaller, with mouth)
+          ctx.fillStyle = '#7a5535';
+          ctx.beginPath();
+          ctx.ellipse(r * 0.65, 0, r * 0.35, r * 0.3, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Facial ridges
+          ctx.strokeStyle = 'rgba(100,60,30,0.5)';
+          ctx.lineWidth = 0.6;
+          ctx.beginPath();
+          ctx.arc(r * 0.65, 0, r * 0.2, -1.2, 1.2);
+          ctx.stroke();
+
+          // Massive front claws/tusks (swing on attack)
+          const clawSwing = anim > 0.3 ? (anim - 0.3) * 1.43 * 0.5 : 0;
+          ctx.fillStyle = '#b89870';
+          ctx.strokeStyle = '#7a5a30';
+          ctx.lineWidth = 1.2;
+          // Upper claw
+          ctx.save();
+          ctx.rotate(-clawSwing);
+          ctx.beginPath();
+          ctx.moveTo(r * 0.55, -r * 0.25);
+          ctx.quadraticCurveTo(r * 1.2, -r * 0.7, r * 1.5 + smash, -r * 0.15);
+          ctx.quadraticCurveTo(r * 1.3 + smash * 0.5, -r * 0.05, r * 0.8, -r * 0.08);
+          ctx.lineTo(r * 0.55, -r * 0.15);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+          // Lower claw
+          ctx.save();
+          ctx.rotate(clawSwing);
+          ctx.beginPath();
+          ctx.moveTo(r * 0.55, r * 0.25);
+          ctx.quadraticCurveTo(r * 1.2, r * 0.7, r * 1.5 + smash, r * 0.15);
+          ctx.quadraticCurveTo(r * 1.3 + smash * 0.5, r * 0.05, r * 0.8, r * 0.08);
+          ctx.lineTo(r * 0.55, r * 0.15);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+
+          // Mouth tusks (smaller inner fangs)
+          ctx.fillStyle = '#d4c4a0';
+          ctx.beginPath();
+          ctx.moveTo(r * 0.8, -r * 0.1);
+          ctx.lineTo(r * 1.0, -r * 0.18);
+          ctx.lineTo(r * 0.88, -r * 0.02);
+          ctx.closePath();
+          ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(r * 0.8, r * 0.1);
+          ctx.lineTo(r * 1.0, r * 0.18);
+          ctx.lineTo(r * 0.88, r * 0.02);
+          ctx.closePath();
+          ctx.fill();
+
+          // Eyes (pinkish-red glow)
+          const eyeGlow = anim > 0 ? 1 : 0.6;
+          ctx.fillStyle = `rgba(255,80,120,${eyeGlow})`;
+          ctx.beginPath();
+          ctx.arc(r * 0.72, -r * 0.12, r * 0.06, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(r * 0.72, r * 0.12, r * 0.06, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Impact shockwave + purple energy burst on attack
+          if (anim > 0.6) {
+            const shk = (anim - 0.6) * 2.5;
+            ctx.strokeStyle = `rgba(180,80,255,${shk * 0.7})`;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(r * 1.3, 0, r * 0.7 * shk, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = `rgba(200,120,255,${shk * 0.3})`;
+            ctx.beginPath();
+            ctx.arc(r * 1.3, 0, r * 0.4 * shk, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          if (selected) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.ellipse(0, 0, r * 1.15, r * 0.75, 0, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+      // ===================== PLAYER / ALLIED UNITS =====================
+      } else if (u.type === 1) {
+        // Triangle (interceptor) - thrust forward on attack
         const angle = Math.atan2(u.vy, u.vx) || 0;
+        const thrustOffset = anim > 0.5 ? (anim - 0.5) * 2 * 5 : anim * 2 * 2;
         ctx.save();
-        ctx.translate(u.x, u.y);
+        ctx.translate(u.x + Math.cos(angle) * thrustOffset, u.y + Math.sin(angle) * thrustOffset);
         ctx.rotate(angle);
+
+        // Main body (arrow shape)
         ctx.beginPath();
-        ctx.moveTo(r + 2, 0);
-        ctx.lineTo(-r, -r * 0.7);
-        ctx.lineTo(-r, r * 0.7);
+        ctx.moveTo(r + 3, 0);
+        ctx.lineTo(-r * 0.3, -r * 0.9);
+        ctx.lineTo(-r * 0.8, -r * 0.4);
+        ctx.lineTo(-r * 0.5, 0);
+        ctx.lineTo(-r * 0.8, r * 0.4);
+        ctx.lineTo(-r * 0.3, r * 0.9);
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
+
+        // Engine glow
+        if (anim > 0.5) {
+          const glowIntensity = (anim - 0.5) * 2;
+          ctx.fillStyle = `rgba(100,200,255,${glowIntensity * 0.8})`;
+          ctx.beginPath();
+          ctx.moveTo(-r * 0.5, 0);
+          ctx.lineTo(-r * 0.8, -r * 0.3);
+          ctx.lineTo(-r - r * glowIntensity * 0.8, 0);
+          ctx.lineTo(-r * 0.8, r * 0.3);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // Muzzle flash on attack
+        if (anim > 0.6) {
+          const flashSize = (anim - 0.6) * 2.5 * r;
+          ctx.fillStyle = `rgba(180,230,255,${(anim - 0.6) * 2.5})`;
+          ctx.beginPath();
+          ctx.arc(r + 3, 0, flashSize * 0.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
         ctx.restore();
       } else if (u.type === 2) {
-        // Square (destroyer)
-        ctx.fillRect(u.x - r, u.y - r, r * 2, r * 2);
-        ctx.strokeRect(u.x - r, u.y - r, r * 2, r * 2);
+        // Destroyer - recoil on attack
+        const moveAngle = Math.atan2(u.vy, u.vx) || 0;
+        const recoil = anim > 0.5 ? (anim - 0.5) * 2 * 4 : 0;
+        const atkDir = u.attackAngle || moveAngle;
+        const rx = u.x - Math.cos(atkDir) * recoil;
+        const ry = u.y - Math.sin(atkDir) * recoil;
+
+        ctx.save();
+        ctx.translate(rx, ry);
+        ctx.rotate(moveAngle);
+
+        // Main hull (rectangle body)
+        ctx.fillRect(-r, -r * 0.75, r * 2, r * 1.5);
+        ctx.strokeRect(-r, -r * 0.75, r * 2, r * 1.5);
+
+        // Bridge/cockpit
+        ctx.fillStyle = colors.light;
+        ctx.fillRect(-r * 0.4, -r * 0.35, r * 0.8, r * 0.7);
+
+        // Cannon barrel
+        ctx.fillStyle = colors.dark;
+        ctx.fillRect(r * 0.6, -r * 0.2, r * 0.8, r * 0.4);
+        ctx.strokeStyle = selected ? '#ffffff' : colors.light;
+        ctx.strokeRect(r * 0.6, -r * 0.2, r * 0.8, r * 0.4);
+
+        // Engine thrusters
+        ctx.fillStyle = colors.dark;
+        ctx.fillRect(-r * 1.1, -r * 0.6, r * 0.3, r * 0.3);
+        ctx.fillRect(-r * 1.1, r * 0.3, r * 0.3, r * 0.3);
+
+        // Muzzle flash on attack
+        if (anim > 0.5) {
+          const flashIntensity = (anim - 0.5) * 2;
+          const flashR = r * 0.8 * flashIntensity;
+          ctx.fillStyle = `rgba(255,200,100,${flashIntensity * 0.9})`;
+          ctx.beginPath();
+          ctx.arc(r * 1.4, 0, flashR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = `rgba(255,255,200,${flashIntensity * 0.6})`;
+          ctx.beginPath();
+          ctx.arc(r * 1.4, 0, flashR * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
       } else {
-        // Circle (battleship)
+        // Battleship - large capital ship shape
+        const atkAngle = u.attackAngle || 0;
+        const angle = Math.atan2(u.vy, u.vx) || 0;
+        const recoil = anim > 0.5 ? (anim - 0.5) * 2 * 2 : 0;
+
+        ctx.save();
+        ctx.translate(u.x - Math.cos(angle) * recoil, u.y - Math.sin(angle) * recoil);
+        ctx.rotate(angle);
+
+        // Attack glow aura
+        if (anim > 0) {
+          const grad = ctx.createRadialGradient(0, 0, r * 0.5, 0, 0, r * 2.5);
+          grad.addColorStop(0, `rgba(${u.owner === 2 ? '255,100,120' : '100,180,255'},${anim * 0.4})`);
+          grad.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(0, 0, r * 2.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.fillStyle = colors.main;
+        ctx.strokeStyle = selected ? '#ffffff' : colors.light;
+        ctx.lineWidth = selected ? 2 : 1;
+
+        // Main hull - elongated hexagonal capital ship
         ctx.beginPath();
-        ctx.arc(u.x, u.y, r, 0, Math.PI * 2);
+        ctx.moveTo(r * 1.6, 0);           // Bow tip
+        ctx.lineTo(r * 0.8, -r * 0.5);    // Front upper
+        ctx.lineTo(r * 0.3, -r * 0.7);    // Upper shoulder
+        ctx.lineTo(-r * 0.8, -r * 0.7);   // Upper rear
+        ctx.lineTo(-r * 1.3, -r * 0.4);   // Rear upper taper
+        ctx.lineTo(-r * 1.3, r * 0.4);    // Rear lower taper
+        ctx.lineTo(-r * 0.8, r * 0.7);    // Lower rear
+        ctx.lineTo(r * 0.3, r * 0.7);     // Lower shoulder
+        ctx.lineTo(r * 0.8, r * 0.5);     // Front lower
+        ctx.closePath();
         ctx.fill();
         ctx.stroke();
-        // Inner detail
+
+        // Bridge / command tower (raised center section)
         ctx.fillStyle = colors.light;
         ctx.beginPath();
-        ctx.arc(u.x, u.y, r * 0.5, 0, Math.PI * 2);
+        ctx.moveTo(r * 0.2, -r * 0.35);
+        ctx.lineTo(-r * 0.3, -r * 0.35);
+        ctx.lineTo(-r * 0.4, -r * 0.15);
+        ctx.lineTo(-r * 0.4, r * 0.15);
+        ctx.lineTo(-r * 0.3, r * 0.35);
+        ctx.lineTo(r * 0.2, r * 0.35);
+        ctx.lineTo(r * 0.3, r * 0.15);
+        ctx.lineTo(r * 0.3, -r * 0.15);
+        ctx.closePath();
         ctx.fill();
+        ctx.strokeStyle = colors.dark;
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+
+        // Core reactor glow
+        const coreGlow = anim > 0 ? 0.8 + anim * 0.2 : 0.5;
+        ctx.fillStyle = `rgba(${u.owner === 2 ? '255,180,180' : '180,220,255'},${coreGlow})`;
+        ctx.beginPath();
+        ctx.arc(-0.05 * r, 0, r * 0.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Forward main cannons (2 barrels)
+        ctx.strokeStyle = selected ? '#ffffff' : colors.light;
+        ctx.lineWidth = selected ? 2 : 1;
+        ctx.fillStyle = colors.dark;
+        // Upper cannon
+        ctx.fillRect(r * 0.5, -r * 0.45, r * 0.9, r * 0.18);
+        ctx.strokeRect(r * 0.5, -r * 0.45, r * 0.9, r * 0.18);
+        // Lower cannon
+        ctx.fillRect(r * 0.5, r * 0.27, r * 0.9, r * 0.18);
+        ctx.strokeRect(r * 0.5, r * 0.27, r * 0.9, r * 0.18);
+
+        // Side turrets (port & starboard)
+        ctx.fillStyle = colors.dark;
+        // Top turret
+        ctx.save();
+        ctx.translate(-r * 0.1, -r * 0.65);
+        ctx.fillRect(-r * 0.15, -r * 0.1, r * 0.3, r * 0.2);
+        ctx.fillRect(r * 0.15, -r * 0.06, r * 0.35, r * 0.12);
+        ctx.restore();
+        // Bottom turret
+        ctx.save();
+        ctx.translate(-r * 0.1, r * 0.65);
+        ctx.fillRect(-r * 0.15, -r * 0.1, r * 0.3, r * 0.2);
+        ctx.fillRect(r * 0.15, -r * 0.06, r * 0.35, r * 0.12);
+        ctx.restore();
+
+        // Engine thrusters (rear)
+        const engineGlow = 0.4 + Math.sin(performance.now() * 0.005) * 0.15;
+        ctx.fillStyle = `rgba(${u.owner === 2 ? '255,140,100' : '100,180,255'},${engineGlow})`;
+        ctx.fillRect(-r * 1.5, -r * 0.3, r * 0.25, r * 0.15);
+        ctx.fillRect(-r * 1.5, r * 0.15, r * 0.25, r * 0.15);
+        ctx.fillRect(-r * 1.5, -r * 0.08, r * 0.2, r * 0.16);
+
+        // Engine housing
+        ctx.fillStyle = colors.dark;
+        ctx.fillRect(-r * 1.3, -r * 0.35, r * 0.15, r * 0.7);
+
+        // Armor panel lines
+        ctx.strokeStyle = `rgba(255,255,255,0.15)`;
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(r * 0.3, -r * 0.68);
+        ctx.lineTo(r * 0.3, r * 0.68);
+        ctx.moveTo(-r * 0.5, -r * 0.68);
+        ctx.lineTo(-r * 0.5, r * 0.68);
+        ctx.stroke();
+
+        // Muzzle flash from main cannons on attack
+        if (anim > 0.5) {
+          const fi = (anim - 0.5) * 2;
+          const flashR = r * 0.5 * fi;
+          // Upper cannon flash
+          ctx.fillStyle = `rgba(255,220,100,${fi * 0.9})`;
+          ctx.beginPath();
+          ctx.arc(r * 1.5, -r * 0.36, flashR, 0, Math.PI * 2);
+          ctx.fill();
+          // Lower cannon flash
+          ctx.beginPath();
+          ctx.arc(r * 1.5, r * 0.36, flashR, 0, Math.PI * 2);
+          ctx.fill();
+          // Bright core
+          ctx.fillStyle = `rgba(255,255,220,${fi * 0.7})`;
+          ctx.beginPath();
+          ctx.arc(r * 1.5, -r * 0.36, flashR * 0.4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(r * 1.5, r * 0.36, flashR * 0.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Side turret flash on attack
+        if (anim > 0.6) {
+          const tf = (anim - 0.6) * 2.5;
+          ctx.fillStyle = `rgba(255,200,120,${tf * 0.8})`;
+          ctx.beginPath();
+          ctx.arc(r * 0.3, -r * 0.75, r * 0.2 * tf, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(r * 0.3, r * 0.75, r * 0.2 * tf, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
       }
 
       // Unit HP bar (only if damaged)
@@ -1081,6 +2035,70 @@ const App = () => {
 
     if (g.phase !== 'playing') return;
 
+    // F1: Select all player units on screen
+    if (e.code === 'F1') {
+      e.preventDefault();
+      const viewW = g.camera.w / g.camera.zoom;
+      const viewH = g.camera.h / g.camera.zoom;
+      const left = g.camera.x;
+      const top = g.camera.y;
+      const right = left + viewW;
+      const bottom = top + viewH;
+      g.selectedUnitIds.clear();
+      g.selectedPlanetIds.clear();
+      for (const u of g.units) {
+        if (u.owner === 1 && u.hp > 0 && u.x >= left && u.x <= right && u.y >= top && u.y <= bottom) {
+          g.selectedUnitIds.add(u.id);
+        }
+      }
+      return;
+    }
+
+    // F2: Select all player units in the entire game
+    if (e.code === 'F2') {
+      e.preventDefault();
+      g.selectedUnitIds.clear();
+      g.selectedPlanetIds.clear();
+      for (const u of g.units) {
+        if (u.owner === 1 && u.hp > 0) {
+          g.selectedUnitIds.add(u.id);
+        }
+      }
+      return;
+    }
+
+    // F3: Select all player planets on screen
+    if (e.code === 'F3') {
+      e.preventDefault();
+      const viewW = g.camera.w / g.camera.zoom;
+      const viewH = g.camera.h / g.camera.zoom;
+      const left = g.camera.x;
+      const top = g.camera.y;
+      const right = left + viewW;
+      const bottom = top + viewH;
+      g.selectedUnitIds.clear();
+      g.selectedPlanetIds.clear();
+      for (const p of g.planets) {
+        if (p.owner === 1 && p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
+          g.selectedPlanetIds.add(p.id);
+        }
+      }
+      return;
+    }
+
+    // F4: Select all player planets in the entire game
+    if (e.code === 'F4') {
+      e.preventDefault();
+      g.selectedUnitIds.clear();
+      g.selectedPlanetIds.clear();
+      for (const p of g.planets) {
+        if (p.owner === 1) {
+          g.selectedPlanetIds.add(p.id);
+        }
+      }
+      return;
+    }
+
     const digitMatch = e.code.match(/^Digit([1-4])$/);
     if (digitMatch) {
       const num = parseInt(digitMatch[1]);
@@ -1245,27 +2263,163 @@ const App = () => {
     <div className="w-screen h-screen relative overflow-hidden select-none" style={{userSelect:'none'}}>
       <canvas ref={canvasRef} className="absolute top-0 left-0" />
 
-      {/* ---- START SCREEN ---- */}
+      {/* ---- START SCREEN (Stellaris-style) ---- */}
       {ui.phase === 'start' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center z-50"
-             style={{background: 'radial-gradient(ellipse at center, rgba(10,20,60,0.95), rgba(0,0,0,0.98))'}}>
-          <h1 className="text-6xl font-bold text-white mb-4 tracking-wider"
-              style={{textShadow: '0 0 30px rgba(68,153,255,0.6), 0 0 60px rgba(68,153,255,0.3)'}}>
-            SPACE BATTLE FLEET
-          </h1>
-          <p className="text-gray-400 text-lg mb-12">2D 실시간 우주 영토 점령 전략 시뮬레이션</p>
-          <button
-            onClick={initGame}
-            className="px-12 py-4 bg-blue-600 hover:bg-blue-500 text-white text-xl font-bold rounded-lg
-                       transition-all duration-200 hover:scale-105"
-            style={{boxShadow: '0 0 20px rgba(68,153,255,0.5)'}}>
-            게임 시작
-          </button>
-          <div className="mt-16 text-gray-500 text-sm text-center space-y-1 max-w-lg">
-            <p>WASD / 방향키: 카메라 이동 | 좌클릭: 행성/유닛 선택 | 우클릭: 이동/공격 명령</p>
-            <p>더블클릭: 화면 내 모든 아군 행성 선택 | 드래그: 유닛 범위 선택</p>
-            <p>Shift + 1~4: 부대 지정 | 1~4: 부대 호출</p>
+        <div className="absolute inset-0 z-50 overflow-hidden" style={{
+          background: 'linear-gradient(175deg, #040810 0%, #0a1628 30%, #0d1f3a 50%, #0a1525 70%, #050a14 100%)',
+        }}>
+
+          {/* Star field background */}
+          <div className="absolute inset-0 pointer-events-none" style={{ overflow: 'hidden' }}>
+            {Array.from({length: 120}, (_, i) => (
+              <div key={i} className="absolute rounded-full" style={{
+                width: Math.random() > 0.9 ? 2 : 1,
+                height: Math.random() > 0.9 ? 2 : 1,
+                background: `rgba(${180 + Math.random()*75}, ${200 + Math.random()*55}, 255, ${0.2 + Math.random()*0.5})`,
+                left: `${Math.random()*100}%`,
+                top: `${Math.random()*100}%`,
+              }} />
+            ))}
           </div>
+
+          {/* Nebula color wash */}
+          <div className="absolute inset-0 pointer-events-none" style={{
+            background: 'radial-gradient(ellipse at 65% 80%, rgba(20,60,120,0.25) 0%, transparent 50%), radial-gradient(ellipse at 30% 20%, rgba(10,40,80,0.15) 0%, transparent 40%)',
+          }} />
+
+          {/* Flying ships (small streaks) */}
+          <div className="absolute pointer-events-none" style={{ left: 0, top: '62%', width: '100%', height: 2 }}>
+            <div style={{
+              position: 'absolute', width: 40, height: 2, top: 0,
+              background: 'linear-gradient(90deg, transparent, rgba(80,200,255,0.8), rgba(80,200,255,0.3))',
+              animation: 'shipFly 8s linear infinite',
+            }} />
+          </div>
+          <div className="absolute pointer-events-none" style={{ left: 0, top: '65%', width: '100%', height: 1 }}>
+            <div style={{
+              position: 'absolute', width: 25, height: 1, top: 0,
+              background: 'linear-gradient(90deg, transparent, rgba(60,180,255,0.6), rgba(60,180,255,0.2))',
+              animation: 'shipFly 10s linear infinite 3s',
+            }} />
+          </div>
+          <div className="absolute pointer-events-none" style={{ left: 0, top: '60%', width: '100%', height: 1 }}>
+            <div style={{
+              position: 'absolute', width: 30, height: 1, top: 0,
+              background: 'linear-gradient(90deg, transparent, rgba(70,190,255,0.7), rgba(70,190,255,0.2))',
+              animation: 'shipFly 12s linear infinite 6s',
+            }} />
+          </div>
+
+          {/* Large planet (bottom right, partially visible) */}
+          <div className="absolute" style={{
+            width: 'min(700px, 80vw)',
+            height: 'min(700px, 80vw)',
+            right: '-5%',
+            bottom: '-35%',
+            borderRadius: '50%',
+            background: 'radial-gradient(circle at 35% 35%, #2a4a6a 0%, #1a3050 30%, #0f2035 60%, #080e18 100%)',
+            animation: 'planetGlow 6s ease-in-out infinite',
+          }}>
+            {/* Atmosphere rim */}
+            <div className="absolute inset-0 rounded-full" style={{
+              background: 'radial-gradient(circle at 30% 30%, transparent 55%, rgba(40,120,200,0.12) 70%, rgba(30,100,180,0.06) 85%, transparent 100%)',
+            }} />
+            {/* Surface hint */}
+            <div className="absolute rounded-full" style={{
+              width: '90%', height: '90%', top: '5%', left: '5%',
+              background: 'radial-gradient(ellipse at 40% 40%, rgba(60,100,140,0.1) 0%, transparent 50%)',
+            }} />
+          </div>
+
+          {/* Content area - centered */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ paddingBottom: '5vh' }}>
+
+            {/* Title block */}
+            <div style={{ animation: 'fadeSlideUp 1.5s ease-out' }}>
+              {/* Small accent line above title */}
+              <div className="mx-auto mb-5" style={{
+                width: 50, height: 1,
+                background: 'rgba(80,200,160,0.5)',
+                boxShadow: '0 0 8px rgba(80,200,160,0.3)',
+              }} />
+
+              {/* Main title */}
+              <h1 className="text-center" style={{
+                fontSize: 'clamp(2.8rem, 7vw, 5.5rem)',
+                fontWeight: 300,
+                letterSpacing: '0.35em',
+                color: '#e0eef8',
+                fontFamily: "'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+                textShadow: '0 0 40px rgba(40,120,180,0.15)',
+                lineHeight: 1,
+              }}>
+                SPACE<span style={{ color: 'rgba(80,200,160,0.9)', fontWeight: 300 }}>BATTLE</span>FLEET
+              </h1>
+
+              {/* Small accent line below title */}
+              <div className="mx-auto mt-5" style={{
+                width: 50, height: 1,
+                background: 'rgba(80,200,160,0.5)',
+                boxShadow: '0 0 8px rgba(80,200,160,0.3)',
+              }} />
+            </div>
+
+            {/* Tagline */}
+            <p className="mt-6 mb-14 text-center" style={{
+              color: 'rgba(150,180,210,0.5)',
+              fontSize: 'clamp(0.7rem, 1.3vw, 0.95rem)',
+              letterSpacing: '0.25em',
+              fontWeight: 300,
+              animation: 'fadeSlideUp 1.8s ease-out',
+            }}>
+              REAL-TIME SPACE TERRITORY CONQUEST SIMULATION
+            </p>
+
+            {/* Start button - clean, minimal */}
+            <button
+              onClick={initGame}
+              className="relative px-14 py-3.5 transition-all duration-300 hover:scale-105 active:scale-95"
+              style={{
+                background: 'transparent',
+                border: '1px solid rgba(80,200,160,0.4)',
+                borderRadius: 2,
+                color: 'rgba(80,200,160,0.9)',
+                fontSize: 'clamp(0.85rem, 1.2vw, 1rem)',
+                fontWeight: 400,
+                letterSpacing: '0.3em',
+                cursor: 'pointer',
+                animation: 'fadeSlideUp 2s ease-out, btnIdle 3s ease-in-out infinite 2s',
+                textShadow: '0 0 10px rgba(80,200,160,0.2)',
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.background = 'rgba(80,200,160,0.1)';
+                e.target.style.borderColor = 'rgba(80,200,160,0.7)';
+                e.target.style.color = 'rgba(120,230,190,1)';
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.background = 'transparent';
+                e.target.style.borderColor = 'rgba(80,200,160,0.4)';
+                e.target.style.color = 'rgba(80,200,160,0.9)';
+              }}>
+              게임 시작
+            </button>
+
+            {/* Controls info */}
+            <div className="mt-16 text-center space-y-2" style={{ animation: 'fadeSlideUp 2.4s ease-out' }}>
+              <p style={{ color: 'rgba(120,150,180,0.35)', fontSize: '0.7rem', letterSpacing: '0.1em' }}>
+                WASD / 방향키: 카메라 이동 &nbsp;&middot;&nbsp; 좌클릭: 선택 &nbsp;&middot;&nbsp; 우클릭: 명령
+              </p>
+              <p style={{ color: 'rgba(120,150,180,0.35)', fontSize: '0.7rem', letterSpacing: '0.1em' }}>
+                F1~F2: 병력 선택 &nbsp;&middot;&nbsp; F3~F4: 행성 선택 &nbsp;&middot;&nbsp; 1~4: 부대 관리
+              </p>
+            </div>
+          </div>
+
+          {/* Bottom fade-out gradient */}
+          <div className="absolute bottom-0 left-0 right-0 pointer-events-none" style={{
+            height: '15%',
+            background: 'linear-gradient(transparent, rgba(4,8,16,0.8))',
+          }} />
         </div>
       )}
 
