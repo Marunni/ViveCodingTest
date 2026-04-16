@@ -55,7 +55,8 @@ const { useState, useRef, useEffect, useCallback } = React;
 // ==================== CONSTANTS ====================
 const MAP_W = 3000;
 const MAP_H = 2000;
-const MAX_POP = 500;
+const BASE_POP = 100;
+const POP_PER_LEVEL = 5;
 const ATTACK_RANGE = 120;
 const CAMERA_SPEED = 1000;
 const EDGE_SCROLL_MARGIN = 30;
@@ -70,9 +71,9 @@ const SEPARATION_STRENGTH = 100;
 const PLANET_RADIUS = 30;
 
 const UNIT_STATS = {
-  1: { name: '요격기', hp: 30, atk: 5, speed: 120, spawnTime: 2.4, radius: 6, pop: 1, gold: 1, shape: 'triangle' },
-  2: { name: '구축함', hp: 80, atk: 15, speed: 80, spawnTime: 4.8, radius: 9, pop: 2, gold: 2, shape: 'square' },
-  3: { name: '전함', hp: 200, atk: 40, speed: 40, spawnTime: 7.2, radius: 14, pop: 3, gold: 3, shape: 'circle' },
+  1: { name: '요격기', hp: 24, atk: 6, speed: 144, spawnTime: 4.8, radius: 6, pop: 1, gold: 1, shape: 'triangle', maxTargets: 1 },
+  2: { name: '구축함', hp: 96, atk: 18, speed: 80, spawnTime: 9.6, radius: 9, pop: 2, gold: 2, shape: 'square', maxTargets: 2 },
+  3: { name: '전함', hp: 320, atk: 40, speed: 40, spawnTime: 14.4, radius: 14, pop: 3, gold: 3, shape: 'circle', maxTargets: 3 },
 };
 
 const ENEMY_UNIT_NAMES = { 1: '맹독충', 2: '칼날벌레', 3: '거대갑충' };
@@ -122,6 +123,7 @@ const App = () => {
     lastClickPlanetId: null,
     isMinimapDragging: false,
     lastFrameTime: 0,
+    stats: { produced: {1:0,2:0,3:0}, kills: {1:0,2:0,3:0}, goldEarned: 0, planetsCaptured: 0 },
   });
 
   // ---- UI State (useState - periodic sync) ----
@@ -130,6 +132,7 @@ const App = () => {
     gameResult: '',
     playerGold: 0,
     playerPop: 0,
+    playerMaxPop: BASE_POP,
     selectedPlanets: [],
     selectedUnitsCount: 0,
     controlGroupCounts: { 1: 0, 2: 0, 3: 0, 4: 0 },
@@ -151,14 +154,15 @@ const App = () => {
     g.selectedUnitIds = new Set();
     g.controlGroups = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() };
     g.gameResult = '';
+    g.stats = { produced: {1:0,2:0,3:0}, kills: {1:0,2:0,3:0}, goldEarned: 0, planetsCaptured: 0 };
 
     // Player planets (left side)
-    g.planets.push(createPlanet(350, 650, 1, 500));
-    g.planets.push(createPlanet(350, 1350, 1, 500));
+    g.planets.push(createPlanet(350, 650, 1, 1000));
+    g.planets.push(createPlanet(350, 1350, 1, 1000));
 
     // AI planets (right side)
-    g.planets.push(createPlanet(2650, 650, 2, 500));
-    g.planets.push(createPlanet(2650, 1350, 2, 500));
+    g.planets.push(createPlanet(2650, 650, 2, 1000));
+    g.planets.push(createPlanet(2650, 1350, 2, 1000));
 
     // Neutral planets (random, min 150px apart)
     const neutralCount = 15;
@@ -172,7 +176,7 @@ const App = () => {
         if (dist(nx, ny, p.x, p.y) < 180) { tooClose = true; break; }
       }
       if (!tooClose) {
-        g.planets.push(createPlanet(nx, ny, 0, 200));
+        g.planets.push(createPlanet(nx, ny, 0, 400));
       }
     }
 
@@ -195,7 +199,7 @@ const App = () => {
   function createPlanet(x, y, owner, hp) {
     return {
       id: genId(), x, y, radius: PLANET_RADIUS,
-      owner, hp, maxHp: owner === 0 ? 200 : 500,
+      owner, hp, maxHp: owner === 0 ? 400 : 1000,
       level: 1,
       productionType: 1,
       spawnTimer: 0,
@@ -207,8 +211,9 @@ const App = () => {
   // ==================== SPAWN UNIT ====================
   function spawnUnit(planet, g) {
     const stats = UNIT_STATS[planet.productionType];
+    const maxPop = getMaxPop(planet.owner, g);
     const pop = planet.owner === 1 ? g.playerPop : g.aiPop;
-    if (pop + stats.pop > MAX_POP) return null;
+    if (pop + stats.pop > maxPop) return null;
 
     const angle = Math.random() * Math.PI * 2;
     const spawnDist = planet.radius + stats.radius + 8;
@@ -231,8 +236,12 @@ const App = () => {
       attackAngle: 0,
     };
 
-    if (planet.owner === 1) g.playerPop += stats.pop;
-    else g.aiPop += stats.pop;
+    if (planet.owner === 1) {
+      g.playerPop += stats.pop;
+      g.stats.produced[planet.productionType]++;
+    } else {
+      g.aiPop += stats.pop;
+    }
 
     // If rally point set, immediately depart
     if (planet.rallyPoint) {
@@ -285,6 +294,14 @@ const App = () => {
     g.camera.y = clamp(g.camera.y, 0, Math.max(0, MAP_H - viewH));
   }
 
+  function getMaxPop(owner, g) {
+    let totalLevels = 0;
+    for (const p of g.planets) {
+      if (p.owner === owner) totalLevels += p.level;
+    }
+    return BASE_POP + POP_PER_LEVEL * totalLevels;
+  }
+
   function updatePlanets(dt, g) {
     for (const p of g.planets) {
       if (p.owner === 0) continue; // neutrals don't produce
@@ -331,12 +348,15 @@ const App = () => {
       u.attackCooldown -= dt;
       if (u.attackAnim > 0) u.attackAnim = Math.max(0, u.attackAnim - dt * 4);
 
-      // Find attack target (prioritize enemy units, then planets)
-      let atkTarget = null;
-      let atkType = null; // 'unit' or 'planet'
-      let minDist = ATTACK_RANGE;
+      // Find attack targets (prioritize enemy units, then planets)
+      const stats = UNIT_STATS[u.type];
+      const maxTargets = stats.maxTargets || 1;
+      let unitTargets = [];
+      let planetTarget = null;
+      let planetDist = ATTACK_RANGE;
 
-      // Check enemy units
+      // Collect enemy units in range sorted by distance
+      const enemiesInRange = [];
       for (const e of g.units) {
         if (e.owner === u.owner || e.hp <= 0) continue;
         const dx = e.x - u.x;
@@ -344,66 +364,74 @@ const App = () => {
         const dy = e.y - u.y;
         if (Math.abs(dy) > ATTACK_RANGE) continue;
         const d = Math.hypot(dx, dy);
-        if (d < minDist) {
-          minDist = d;
-          atkTarget = e;
-          atkType = 'unit';
+        if (d < ATTACK_RANGE) {
+          enemiesInRange.push({ target: e, dist: d });
         }
       }
+      enemiesInRange.sort((a, b) => a.dist - b.dist);
+      unitTargets = enemiesInRange.slice(0, maxTargets);
 
       // Check enemy/neutral planets (only if no enemy unit found)
-      if (!atkTarget) {
+      if (unitTargets.length === 0) {
         for (const p of g.planets) {
           if (p.owner === u.owner) continue;
           const d = dist(u.x, u.y, p.x, p.y) - p.radius;
-          if (d < ATTACK_RANGE && d < minDist) {
-            minDist = d;
-            atkTarget = p;
-            atkType = 'planet';
+          if (d < ATTACK_RANGE && d < planetDist) {
+            planetDist = d;
+            planetTarget = p;
           }
         }
       }
 
-      // Attack if target found
-      if (atkTarget && u.attackCooldown <= 0) {
+      const hasTarget = unitTargets.length > 0 || planetTarget;
+
+      // Attack if targets found
+      if (hasTarget && u.attackCooldown <= 0) {
         u.attackCooldown = 0.5;
         u.attackAnim = 1.0;
-        u.attackAngle = Math.atan2(
-          (atkType === 'unit' ? atkTarget.y : atkTarget.y) - u.y,
-          (atkType === 'unit' ? atkTarget.x : atkTarget.x) - u.x
-        );
-        if (atkType === 'unit') {
-          atkTarget.hp -= UNIT_STATS[u.type].atk;
-          if (atkTarget.hp <= 0) {
-            // Gold reward
-            const reward = UNIT_STATS[atkTarget.type].gold;
-            if (u.owner === 1) g.playerGold += reward;
-            // Pop return
-            const deadPop = UNIT_STATS[atkTarget.type].pop;
-            if (atkTarget.owner === 1) g.playerPop -= deadPop;
-            else g.aiPop -= deadPop;
+
+        if (unitTargets.length > 0) {
+          u.attackAngle = Math.atan2(unitTargets[0].target.y - u.y, unitTargets[0].target.x - u.x);
+          for (const { target: et } of unitTargets) {
+            et.hp -= UNIT_STATS[u.type].atk;
+            if (et.hp <= 0) {
+              const reward = UNIT_STATS[et.type].gold;
+              if (u.owner === 1) {
+                g.playerGold += reward;
+                g.stats.goldEarned += reward;
+                g.stats.kills[et.type]++;
+              }
+              const deadPop = UNIT_STATS[et.type].pop;
+              if (et.owner === 1) g.playerPop -= deadPop;
+              else g.aiPop -= deadPop;
+            }
+            // Spawn laser particle for each target
+            g.particles.push({
+              type: 'laser',
+              x1: u.x, y1: u.y,
+              x2: et.x, y2: et.y,
+              color: FACTION_COLORS[u.owner].light,
+              life: 0.15, maxLife: 0.15,
+            });
           }
-        } else {
-          atkTarget.hp -= UNIT_STATS[u.type].atk;
-          if (atkTarget.hp <= 0) {
-            // Capture planet
-            capturePlanet(atkTarget, u.owner, g);
+        } else if (planetTarget) {
+          u.attackAngle = Math.atan2(planetTarget.y - u.y, planetTarget.x - u.x);
+          planetTarget.hp -= UNIT_STATS[u.type].atk;
+          if (planetTarget.hp <= 0) {
+            capturePlanet(planetTarget, u.owner, g);
           }
+          g.particles.push({
+            type: 'laser',
+            x1: u.x, y1: u.y,
+            x2: planetTarget.x, y2: planetTarget.y,
+            color: FACTION_COLORS[u.owner].light,
+            life: 0.15, maxLife: 0.15,
+          });
         }
-        // Spawn laser particle
-        const tx = atkType === 'unit' ? atkTarget.x : atkTarget.x;
-        const ty = atkType === 'unit' ? atkTarget.y : atkTarget.y;
-        g.particles.push({
-          type: 'laser',
-          x1: u.x, y1: u.y,
-          x2: tx, y2: ty,
-          color: FACTION_COLORS[u.owner].light,
-          life: 0.15, maxLife: 0.15,
-        });
       }
 
       // Movement logic
-      if (atkTarget && atkType === 'unit') {
+      if (unitTargets.length > 0) {
         // Stop to fight enemy units
         u.vx = 0; u.vy = 0;
       } else if (u.targetX !== null && u.targetY !== null) {
@@ -489,9 +517,13 @@ const App = () => {
   function capturePlanet(planet, newOwner, g) {
     // Gold reward based on planet level before reset
     if (newOwner === 1) {
-      g.playerGold += planet.level * 20;
+      const reward = planet.level * 20;
+      g.playerGold += reward;
+      g.stats.goldEarned += reward;
+      g.stats.planetsCaptured++;
     }
     planet.owner = newOwner;
+    planet.maxHp = newOwner === 0 ? 400 : 1000;
     planet.hp = planet.maxHp;
     planet.level = 1;
     planet.productionType = 1;
@@ -548,7 +580,11 @@ const App = () => {
     // AI doesn't use gold system (simplified), but we give AI auto-upgrades over time
     for (const p of aiPlanets) {
       if (Math.random() < 0.15 && p.level < 10) {
+        const baseHp = 1000;
+        const hpGain = baseHp * 0.2;
         p.level++;
+        p.maxHp = baseHp * (1 + 0.2 * (p.level - 1));
+        p.hp = Math.min(p.maxHp, p.hp + hpGain);
       }
     }
   }
@@ -560,11 +596,11 @@ const App = () => {
     if (aiPlanets === 0) {
       g.phase = 'gameover';
       g.gameResult = 'victory';
-      setUi(prev => ({ ...prev, phase: 'gameover', gameResult: 'victory' }));
+      setUi(prev => ({ ...prev, phase: 'gameover', gameResult: 'victory', gameStats: {...g.stats} }));
     } else if (playerPlanets === 0) {
       g.phase = 'gameover';
       g.gameResult = 'defeat';
-      setUi(prev => ({ ...prev, phase: 'gameover', gameResult: 'defeat' }));
+      setUi(prev => ({ ...prev, phase: 'gameover', gameResult: 'defeat', gameStats: {...g.stats} }));
     }
   }
 
@@ -579,6 +615,7 @@ const App = () => {
       gameResult: g.gameResult,
       playerGold: g.playerGold,
       playerPop: g.playerPop,
+      playerMaxPop: getMaxPop(1, g),
       selectedPlanets: selPlanets.map(p => ({
         id: p.id, hp: p.hp, maxHp: p.maxHp, level: p.level,
         productionType: p.productionType, owner: p.owner,
@@ -2033,6 +2070,23 @@ const App = () => {
     const g = G.current;
     g.keys.add(e.code);
 
+    // ESC: toggle pause menu
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      if (g.phase === 'playing') {
+        g.phase = 'paused';
+        setUi(prev => ({ ...prev, phase: 'paused' }));
+      } else if (g.phase === 'paused') {
+        g.phase = 'playing';
+        g.lastFrameTime = performance.now();
+        setUi(prev => ({ ...prev, phase: 'playing' }));
+      } else if (g.phase === 'help') {
+        g.phase = 'paused';
+        setUi(prev => ({ ...prev, phase: 'paused' }));
+      }
+      return;
+    }
+
     if (g.phase !== 'playing') return;
 
     // F1: Select all player units on screen
@@ -2144,11 +2198,15 @@ const App = () => {
     const g = G.current;
     for (const pid of g.selectedPlanetIds) {
       const p = g.planets.find(pl => pl.id === pid);
-      if (!p || p.owner !== 1) continue;
+      if (!p || p.owner !== 1 || p.level >= 10) continue;
       const cost = p.level * 50;
       if (g.playerGold >= cost) {
         g.playerGold -= cost;
+        const baseHp = p.owner === 0 ? 400 : 1000;
+        const hpGain = baseHp * 0.2;
         p.level++;
+        p.maxHp = baseHp * (1 + 0.2 * (p.level - 1));
+        p.hp = Math.min(p.maxHp, p.hp + hpGain);
       }
     }
   }, []);
@@ -2261,7 +2319,8 @@ const App = () => {
 
   return (
     <div className="w-screen h-screen relative overflow-hidden select-none" style={{userSelect:'none'}}>
-      <canvas ref={canvasRef} className="absolute top-0 left-0" />
+      <canvas ref={canvasRef} className="absolute top-0 left-0 z-0"
+        style={{ pointerEvents: (ui.phase === 'paused' || ui.phase === 'help') ? 'none' : 'auto' }} />
 
       {/* ---- START SCREEN (Stellaris-style) ---- */}
       {ui.phase === 'start' && (
@@ -2434,7 +2493,7 @@ const App = () => {
               </span>
               <span className="text-gray-400 mx-3">|</span>
               <span className="text-blue-300 font-bold text-lg">
-                ♦ {ui.playerPop} / {MAX_POP}
+                ♦ {ui.playerPop} / {ui.playerMaxPop || BASE_POP}
               </span>
             </div>
           </div>
@@ -2541,27 +2600,345 @@ const App = () => {
         </>
       )}
 
-      {/* ---- GAME OVER SCREEN ---- */}
-      {ui.phase === 'gameover' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center z-50 bg-black/80">
-          <h1
-            className={`text-8xl font-black mb-8 ${ui.gameResult === 'victory' ? 'text-blue-400' : 'text-red-500'}`}
-            style={{textShadow: ui.gameResult === 'victory'
-              ? '0 0 40px rgba(68,153,255,0.8)' : '0 0 40px rgba(255,68,85,0.8)'}}>
-            {ui.gameResult === 'victory' ? 'VICTORY' : 'DEFEAT'}
-          </h1>
-          <p className="text-gray-400 text-xl mb-12">
-            {ui.gameResult === 'victory' ? '우주를 통일하였습니다!' : '모든 행성을 잃었습니다...'}
-          </p>
-          <button
-            onClick={initGame}
-            className="px-12 py-4 bg-blue-600 hover:bg-blue-500 text-white text-xl font-bold rounded-lg
-                       transition-all duration-200 hover:scale-105"
-            style={{boxShadow: '0 0 20px rgba(68,153,255,0.5)'}}>
-            다시 시작
-          </button>
+      {/* ---- PAUSE SCREEN ---- */}
+      {ui.phase === 'paused' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center"
+             style={{ zIndex: 9999, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
+          <div className="flex flex-col items-center gap-6"
+               style={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.15)',
+                        borderRadius: 16, padding: '40px 48px', minWidth: 320,
+                        boxShadow: '0 0 60px rgba(0,0,0,0.8)' }}>
+            <h2 style={{ fontSize: 36, fontWeight: 'bold', color: '#fff', letterSpacing: '0.15em',
+                         textShadow: '0 0 20px rgba(100,180,255,0.3)', marginBottom: 8 }}>
+              일시정지
+            </h2>
+            <div style={{ width: '100%', height: 1, background: 'rgba(255,255,255,0.1)', marginBottom: 8 }} />
+            <button
+              onClick={() => {
+                const g = G.current;
+                g.phase = 'playing';
+                g.lastFrameTime = performance.now();
+                setUi(prev => ({ ...prev, phase: 'playing' }));
+              }}
+              style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
+                       background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer',
+                       boxShadow: '0 0 15px rgba(68,153,255,0.3)', transition: 'all 0.2s' }}
+              onMouseEnter={e => e.target.style.background = '#3b82f6'}
+              onMouseLeave={e => e.target.style.background = '#2563eb'}>
+              계속하기
+            </button>
+            <button
+              onClick={() => {
+                const g = G.current;
+                g.phase = 'start';
+                g.gameResult = '';
+                setUi(prev => ({ ...prev, phase: 'start', gameResult: '' }));
+              }}
+              style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
+                       background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+              onMouseEnter={e => e.target.style.background = '#4b5563'}
+              onMouseLeave={e => e.target.style.background = '#374151'}>
+              시작화면
+            </button>
+            <button
+              onClick={() => { initGame(); }}
+              style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
+                       background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+              onMouseEnter={e => e.target.style.background = '#4b5563'}
+              onMouseLeave={e => e.target.style.background = '#374151'}>
+              다시하기
+            </button>
+            <button
+              onClick={() => {
+                const g = G.current;
+                g.phase = 'help';
+                setUi(prev => ({ ...prev, phase: 'help' }));
+              }}
+              style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
+                       background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+              onMouseEnter={e => e.target.style.background = '#4b5563'}
+              onMouseLeave={e => e.target.style.background = '#374151'}>
+              도움말
+            </button>
+          </div>
         </div>
       )}
+
+      {/* ---- HELP SCREEN ---- */}
+      {ui.phase === 'help' && (
+        <div className="absolute inset-0 flex flex-col overflow-auto"
+             style={{ zIndex: 9999, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)' }}>
+          {/* 뒤로가기 버튼 */}
+          <button
+            onClick={() => {
+              const g = G.current;
+              g.phase = 'paused';
+              setUi(prev => ({ ...prev, phase: 'paused' }));
+            }}
+            style={{ position: 'absolute', top: 20, left: 20, padding: '8px 16px', borderRadius: 8,
+                     fontSize: 14, fontWeight: 'bold', background: '#1f2937', color: '#e5e7eb',
+                     border: '1px solid rgba(255,255,255,0.15)', cursor: 'pointer', zIndex: 10,
+                     display: 'flex', alignItems: 'center', gap: 8, transition: 'all 0.2s' }}
+            onMouseEnter={e => e.target.style.background = '#374151'}
+            onMouseLeave={e => e.target.style.background = '#1f2937'}>
+            <span>◀</span> 뒤로가기
+          </button>
+
+          <div className="max-w-2xl w-full mx-auto mt-20 mb-10 px-6">
+            <h2 className="text-3xl font-bold text-white tracking-wide mb-8 text-center"
+                style={{ textShadow: '0 0 20px rgba(100,180,255,0.3)' }}>
+              도움말
+            </h2>
+
+            {/* 조작키 */}
+            <div className="bg-gray-900/90 border border-white/10 rounded-xl p-6 mb-6">
+              <h3 className="text-xl font-bold text-blue-300 mb-4">🎮 조작키</h3>
+              <table className="w-full text-sm">
+                <tbody>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold w-40">WASD / 방향키</td>
+                    <td className="py-2 text-gray-300">카메라 이동</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">마우스 휠</td>
+                    <td className="py-2 text-gray-300">줌 인/아웃</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">좌클릭</td>
+                    <td className="py-2 text-gray-300">행성/유닛 선택 (드래그로 범위 선택)</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">좌클릭 x2 (더블클릭)</td>
+                    <td className="py-2 text-gray-300">행성 생산 유닛 변경</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">우클릭</td>
+                    <td className="py-2 text-gray-300">유닛 이동/공격 명령, 집결지 설정</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">F1</td>
+                    <td className="py-2 text-gray-300">화면 내 아군 유닛 전체 선택</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">F2</td>
+                    <td className="py-2 text-gray-300">맵 전체 아군 유닛 선택</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">F3</td>
+                    <td className="py-2 text-gray-300">화면 내 아군 행성 전체 선택</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">F4</td>
+                    <td className="py-2 text-gray-300">맵 전체 아군 행성 선택</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">Shift/Ctrl + 1~4</td>
+                    <td className="py-2 text-gray-300">부대 지정 (컨트롤 그룹 저장)</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">1 ~ 4</td>
+                    <td className="py-2 text-gray-300">저장된 부대 선택</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* 행성 레벨 */}
+            <div className="bg-gray-900/90 border border-white/10 rounded-xl p-6 mb-6">
+              <h3 className="text-xl font-bold text-blue-300 mb-4">🪐 행성 레벨 시스템</h3>
+              <p className="text-gray-300 text-sm mb-4">
+                행성의 최대 레벨은 <span className="text-yellow-300 font-bold">10</span>입니다.
+                골드를 소모하여 행성 레벨을 올릴 수 있으며, 레벨이 높을수록 유닛 생산 속도가 빨라지고 행성 체력이 증가합니다.
+              </p>
+
+              {/* 인구 시스템 */}
+              <div className="bg-black/40 rounded-lg p-4 mb-4">
+                <h4 className="text-sm font-bold text-cyan-300 mb-2">인구 시스템</h4>
+                <p className="text-gray-300 text-xs">
+                  기본 최대 인구: <span className="text-white font-bold">100</span><br/>
+                  보유한 행성 레벨 1당 인구 <span className="text-yellow-300 font-bold">+5</span> 증가<br/>
+                  <span className="text-gray-500">(예: Lv3 행성 2개 보유 시 → 100 + (3+3)×5 = 130)</span>
+                </p>
+              </div>
+
+              {/* 행성 체력 */}
+              <div className="bg-black/40 rounded-lg p-4 mb-4">
+                <h4 className="text-sm font-bold text-red-300 mb-2">행성 체력</h4>
+                <p className="text-gray-300 text-xs mb-2">
+                  소유 행성 기본 HP: <span className="text-white font-bold">1000</span> | 중립 행성 기본 HP: <span className="text-white font-bold">400</span>
+                </p>
+                <p className="text-gray-300 text-xs">
+                  레벨당 HP <span className="text-yellow-300 font-bold">+20%</span> 증가 (Lv1 기준 기본 체력의 20%씩)<br/>
+                  <span className="text-gray-500">레벨업 시 증가분만큼만 회복 (예: 소유 행성 Lv2 → maxHP 1200, +200 회복)</span>
+                </p>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs mt-2">
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 1</span><span className="text-white">1000 HP (기본)</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 2</span><span className="text-white">1200 HP</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 3</span><span className="text-white">1400 HP</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 5</span><span className="text-white">1800 HP</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 7</span><span className="text-white">2200 HP</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 10 (최대)</span><span className="text-yellow-300 font-bold">2800 HP</span></div>
+                </div>
+              </div>
+
+              <div className="bg-black/40 rounded-lg p-4">
+                <h4 className="text-sm font-bold text-green-300 mb-3">레벨별 생산 속도 보너스</h4>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 1 (기본)</span><span className="text-white">생산시간 감소 0%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 2</span><span className="text-white">생산시간 감소 10%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 3</span><span className="text-white">생산시간 감소 20%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 4</span><span className="text-white">생산시간 감소 30%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 5</span><span className="text-white">생산시간 감소 40%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 6</span><span className="text-white">생산시간 감소 50%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 7</span><span className="text-white">생산시간 감소 60%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 8</span><span className="text-white">생산시간 감소 70%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 9</span><span className="text-white">생산시간 감소 80%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-400">Lv 10 (최대)</span><span className="text-yellow-300 font-bold">생산시간 감소 90%</span></div>
+                </div>
+                <p className="text-gray-500 text-xs mt-3">
+                  ※ 업그레이드 비용: 현재 레벨 × 50G (예: Lv1→2 = 50G, Lv9→10 = 450G)
+                </p>
+              </div>
+            </div>
+
+            {/* 유닛 정보 */}
+            <div className="bg-gray-900/90 border border-white/10 rounded-xl p-6">
+              <h3 className="text-xl font-bold text-blue-300 mb-4">⚔️ 유닛 정보</h3>
+              <div className="space-y-3">
+                <div className="flex items-center gap-4 bg-black/30 rounded-lg p-3">
+                  <span className="text-2xl">▲</span>
+                  <div className="flex-1">
+                    <div className="text-white font-bold">요격기 <span className="text-gray-500 text-xs font-normal">(인구 1)</span></div>
+                    <div className="text-gray-400 text-xs">HP 24 | 공격력 6 | 속도 144 | 생산시간 4.8초 | 처치 보상 1G</div>
+                    <div className="text-green-400 text-xs mt-1">빠른 속도, 대량 생산에 적합한 정찰/견제 유닛</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 bg-black/30 rounded-lg p-3">
+                  <span className="text-2xl">■</span>
+                  <div className="flex-1">
+                    <div className="text-white font-bold">구축함 <span className="text-gray-500 text-xs font-normal">(인구 2)</span></div>
+                    <div className="text-gray-400 text-xs">HP 96 | 공격력 18 | 속도 80 | 생산시간 9.6초 | 처치 보상 2G</div>
+                    <div className="text-orange-400 text-xs mt-1">사거리 내 적 유닛 최대 2기 동시 공격 가능</div>
+                    <div className="text-green-400 text-xs">균형 잡힌 스탯의 주력 전투 유닛</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 bg-black/30 rounded-lg p-3">
+                  <span className="text-2xl">●</span>
+                  <div className="flex-1">
+                    <div className="text-white font-bold">전함 <span className="text-gray-500 text-xs font-normal">(인구 3)</span></div>
+                    <div className="text-gray-400 text-xs">HP 320 | 공격력 40 | 속도 40 | 생산시간 14.4초 | 처치 보상 3G</div>
+                    <div className="text-orange-400 text-xs mt-1">사거리 내 적 유닛 최대 3기 동시 공격 가능</div>
+                    <div className="text-green-400 text-xs">높은 체력과 강력한 공격력의 핵심 전력 유닛</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- GAME OVER SCREEN ---- */}
+      {ui.phase === 'gameover' && (() => {
+        const s = ui.gameStats || { produced:{1:0,2:0,3:0}, kills:{1:0,2:0,3:0}, goldEarned:0, planetsCaptured:0 };
+        const isVictory = ui.gameResult === 'victory';
+        return (
+        <div className="absolute inset-0 flex flex-col items-center justify-center z-50"
+             style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)' }}>
+          <h1
+            style={{ fontSize: 'clamp(3rem, 8vw, 6rem)', fontWeight: 900, marginBottom: 8,
+                     color: isVictory ? '#60a5fa' : '#ef4444',
+                     textShadow: isVictory ? '0 0 40px rgba(68,153,255,0.8)' : '0 0 40px rgba(255,68,85,0.8)' }}>
+            {isVictory ? 'VICTORY' : 'DEFEAT'}
+          </h1>
+          <p style={{ color: '#9ca3af', fontSize: 18, marginBottom: 32 }}>
+            {isVictory ? '우주를 통일하였습니다!' : '모든 행성을 잃었습니다...'}
+          </p>
+
+          {/* 전투 결과 */}
+          <div style={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: 16, padding: '28px 36px', minWidth: 380, maxWidth: 480, marginBottom: 32 }}>
+            <h3 style={{ color: '#93c5fd', fontSize: 18, fontWeight: 'bold', marginBottom: 16, textAlign: 'center',
+                         letterSpacing: '0.1em' }}>전투 결과</h3>
+
+            {/* 생산한 병력 */}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ color: '#6ee7b7', fontSize: 13, fontWeight: 'bold', marginBottom: 8 }}>🚀 생산한 병력</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
+                  <div style={{ color: '#9ca3af', fontSize: 11 }}>▲ 요격기</div>
+                  <div style={{ color: '#fff', fontSize: 20, fontWeight: 'bold' }}>{s.produced[1]}</div>
+                </div>
+                <div style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
+                  <div style={{ color: '#9ca3af', fontSize: 11 }}>■ 구축함</div>
+                  <div style={{ color: '#fff', fontSize: 20, fontWeight: 'bold' }}>{s.produced[2]}</div>
+                </div>
+                <div style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
+                  <div style={{ color: '#9ca3af', fontSize: 11 }}>● 전함</div>
+                  <div style={{ color: '#fff', fontSize: 20, fontWeight: 'bold' }}>{s.produced[3]}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* 처치한 적 병력 */}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ color: '#fca5a5', fontSize: 13, fontWeight: 'bold', marginBottom: 8 }}>💀 처치한 적 병력</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
+                  <div style={{ color: '#9ca3af', fontSize: 11 }}>맹독충</div>
+                  <div style={{ color: '#ff6677', fontSize: 20, fontWeight: 'bold' }}>{s.kills[1]}</div>
+                </div>
+                <div style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
+                  <div style={{ color: '#9ca3af', fontSize: 11 }}>칼날벌레</div>
+                  <div style={{ color: '#ff6677', fontSize: 20, fontWeight: 'bold' }}>{s.kills[2]}</div>
+                </div>
+                <div style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
+                  <div style={{ color: '#9ca3af', fontSize: 11 }}>거대갑충</div>
+                  <div style={{ color: '#ff6677', fontSize: 20, fontWeight: 'bold' }}>{s.kills[3]}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* 자원 / 점령 */}
+            <div style={{ display: 'flex', gap: 12 }}>
+              <div style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '10px 12px', textAlign: 'center' }}>
+                <div style={{ color: '#fbbf24', fontSize: 12, marginBottom: 4 }}>⬡ 획득 골드</div>
+                <div style={{ color: '#fbbf24', fontSize: 22, fontWeight: 'bold' }}>{s.goldEarned}G</div>
+              </div>
+              <div style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '10px 12px', textAlign: 'center' }}>
+                <div style={{ color: '#67e8f9', fontSize: 12, marginBottom: 4 }}>🪐 점령 행성</div>
+                <div style={{ color: '#67e8f9', fontSize: 22, fontWeight: 'bold' }}>{s.planetsCaptured}개</div>
+              </div>
+            </div>
+          </div>
+
+          {/* 버튼 */}
+          <div style={{ display: 'flex', gap: 16 }}>
+            <button
+              onClick={initGame}
+              style={{ padding: '14px 36px', background: '#2563eb', color: '#fff', fontSize: 18, fontWeight: 'bold',
+                       borderRadius: 10, border: 'none', cursor: 'pointer', transition: 'all 0.2s',
+                       boxShadow: '0 0 20px rgba(68,153,255,0.4)' }}
+              onMouseEnter={e => e.target.style.background = '#3b82f6'}
+              onMouseLeave={e => e.target.style.background = '#2563eb'}>
+              다시하기
+            </button>
+            <button
+              onClick={() => {
+                const g2 = G.current;
+                g2.phase = 'start';
+                g2.gameResult = '';
+                setUi(prev => ({ ...prev, phase: 'start', gameResult: '' }));
+              }}
+              style={{ padding: '14px 36px', background: '#374151', color: '#e5e7eb', fontSize: 18, fontWeight: 'bold',
+                       borderRadius: 10, border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+              onMouseEnter={e => e.target.style.background = '#4b5563'}
+              onMouseLeave={e => e.target.style.background = '#374151'}>
+              시작화면
+            </button>
+          </div>
+        </div>
+        );
+      })()}
     </div>
   );
 };
