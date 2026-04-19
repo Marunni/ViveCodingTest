@@ -71,7 +71,7 @@ const SEPARATION_STRENGTH = 100;
 const PLANET_RADIUS = 30;
 
 const UNIT_STATS = {
-  1: { name: '요격기', hp: 24, atk: 6, speed: 144, spawnTime: 4.8, radius: 6, pop: 1, gold: 1, shape: 'triangle', maxTargets: 1 },
+    1: { name: '요격기', hp: 24, atk: 6, speed: 144, spawnTime: 4.8, radius: 6, pop: 1, gold: 1, shape: 'triangle', maxTargets: 1 },
   2: { name: '구축함', hp: 96, atk: 18, speed: 80, spawnTime: 9.6, radius: 9, pop: 2, gold: 2, shape: 'square', maxTargets: 2 },
   3: { name: '전함', hp: 320, atk: 40, speed: 40, spawnTime: 14.4, radius: 14, pop: 3, gold: 3, shape: 'circle', maxTargets: 3 },
 };
@@ -1535,52 +1535,205 @@ const App = () => {
 
       // ===================== PLAYER / ALLIED UNITS =====================
       } else if (u.type === 1) {
-        // Triangle (interceptor) - thrust forward on attack
+        // ── INTERCEPTOR: Swept V-wing fighter (realistic) ──
         const angle = Math.atan2(u.vy, u.vx) || 0;
         const thrustOffset = anim > 0.5 ? (anim - 0.5) * 2 * 5 : anim * 2 * 2;
         ctx.save();
         ctx.translate(u.x + Math.cos(angle) * thrustOffset, u.y + Math.sin(angle) * thrustOffset);
         ctx.rotate(angle);
 
-        // Main body (arrow shape)
+        const t = performance.now() * 0.001;
+        const engineFlicker = 0.6 + Math.sin(t * 12) * 0.2;
+
+        // Engine exhaust glow (rear)
+        const exGlow = ctx.createRadialGradient(-r * 0.9, 0, 0, -r * 0.9, 0, r * 0.6);
+        exGlow.addColorStop(0, `rgba(100,200,255,${engineFlicker * 0.7})`);
+        exGlow.addColorStop(0.5, `rgba(60,140,220,${engineFlicker * 0.3})`);
+        exGlow.addColorStop(1, 'rgba(30,80,180,0)');
+        ctx.fillStyle = exGlow;
         ctx.beginPath();
-        ctx.moveTo(r + 3, 0);
-        ctx.lineTo(-r * 0.3, -r * 0.9);
-        ctx.lineTo(-r * 0.8, -r * 0.4);
-        ctx.lineTo(-r * 0.5, 0);
-        ctx.lineTo(-r * 0.8, r * 0.4);
-        ctx.lineTo(-r * 0.3, r * 0.9);
+        ctx.arc(-r * 0.9, 0, r * 0.6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Wing-tip engine glow (upper)
+        const wGlow1 = ctx.createRadialGradient(-r * 0.6, -r * 0.95, 0, -r * 0.6, -r * 0.95, r * 0.35);
+        wGlow1.addColorStop(0, `rgba(80,180,255,${engineFlicker * 0.5})`);
+        wGlow1.addColorStop(1, 'rgba(30,80,180,0)');
+        ctx.fillStyle = wGlow1;
+        ctx.beginPath();
+        ctx.arc(-r * 0.6, -r * 0.95, r * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+        // Wing-tip engine glow (lower)
+        const wGlow2 = ctx.createRadialGradient(-r * 0.6, r * 0.95, 0, -r * 0.6, r * 0.95, r * 0.35);
+        wGlow2.addColorStop(0, `rgba(80,180,255,${engineFlicker * 0.5})`);
+        wGlow2.addColorStop(1, 'rgba(30,80,180,0)');
+        ctx.fillStyle = wGlow2;
+        ctx.beginPath();
+        ctx.arc(-r * 0.6, r * 0.95, r * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Upper swept wing
+        ctx.fillStyle = '#3a5a7a';
+        ctx.beginPath();
+        ctx.moveTo(r * 0.1, -r * 0.15);
+        ctx.lineTo(-r * 0.15, -r * 0.25);
+        ctx.lineTo(-r * 0.7, -r * 1.1);
+        ctx.lineTo(-r * 0.5, -r * 1.15);
+        ctx.lineTo(-r * 0.2, -r * 0.7);
+        ctx.lineTo(-r * 0.55, -r * 0.3);
         ctx.closePath();
         ctx.fill();
+        // Wing dark edge
+        ctx.fillStyle = '#2a4060';
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.15, -r * 0.25);
+        ctx.lineTo(-r * 0.7, -r * 1.1);
+        ctx.lineTo(-r * 0.5, -r * 1.15);
+        ctx.lineTo(-r * 0.05, -r * 0.35);
+        ctx.closePath();
+        ctx.fill();
+        // Wing-tip nacelle (upper)
+        ctx.fillStyle = '#4a3a30';
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.5, -r * 1.15);
+        ctx.lineTo(-r * 0.7, -r * 1.1);
+        ctx.lineTo(-r * 0.85, -r * 0.9);
+        ctx.lineTo(-r * 0.65, -r * 0.85);
+        ctx.closePath();
+        ctx.fill();
+
+        // Lower swept wing (mirror)
+        ctx.fillStyle = '#3a5a7a';
+        ctx.beginPath();
+        ctx.moveTo(r * 0.1, r * 0.15);
+        ctx.lineTo(-r * 0.15, r * 0.25);
+        ctx.lineTo(-r * 0.7, r * 1.1);
+        ctx.lineTo(-r * 0.5, r * 1.15);
+        ctx.lineTo(-r * 0.2, r * 0.7);
+        ctx.lineTo(-r * 0.55, r * 0.3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#2a4060';
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.15, r * 0.25);
+        ctx.lineTo(-r * 0.7, r * 1.1);
+        ctx.lineTo(-r * 0.5, r * 1.15);
+        ctx.lineTo(-r * 0.05, r * 0.35);
+        ctx.closePath();
+        ctx.fill();
+        // Wing-tip nacelle (lower)
+        ctx.fillStyle = '#4a3a30';
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.5, r * 1.15);
+        ctx.lineTo(-r * 0.7, r * 1.1);
+        ctx.lineTo(-r * 0.85, r * 0.9);
+        ctx.lineTo(-r * 0.65, r * 0.85);
+        ctx.closePath();
+        ctx.fill();
+
+        // Central fuselage body
+        ctx.fillStyle = '#4a6a8a';
+        ctx.beginPath();
+        ctx.moveTo(r * 1.3, 0);
+        ctx.lineTo(r * 0.4, -r * 0.22);
+        ctx.lineTo(-r * 0.1, -r * 0.28);
+        ctx.lineTo(-r * 0.7, -r * 0.2);
+        ctx.lineTo(-r * 0.85, 0);
+        ctx.lineTo(-r * 0.7, r * 0.2);
+        ctx.lineTo(-r * 0.1, r * 0.28);
+        ctx.lineTo(r * 0.4, r * 0.22);
+        ctx.closePath();
+        ctx.fill();
+
+        // Fuselage top highlight
+        ctx.fillStyle = '#5a8aaa';
+        ctx.beginPath();
+        ctx.moveTo(r * 1.1, -r * 0.02);
+        ctx.lineTo(r * 0.4, -r * 0.18);
+        ctx.lineTo(-r * 0.4, -r * 0.2);
+        ctx.lineTo(-r * 0.6, -r * 0.05);
+        ctx.lineTo(-r * 0.4, r * 0.05);
+        ctx.lineTo(r * 0.4, r * 0.02);
+        ctx.closePath();
+        ctx.fill();
+
+        // Fuselage dark underside
+        ctx.fillStyle = '#2a4a65';
+        ctx.beginPath();
+        ctx.moveTo(r * 0.3, r * 0.2);
+        ctx.lineTo(-r * 0.6, r * 0.18);
+        ctx.lineTo(-r * 0.8, r * 0.05);
+        ctx.lineTo(-r * 0.6, r * 0.14);
+        ctx.lineTo(r * 0.3, r * 0.15);
+        ctx.closePath();
+        ctx.fill();
+
+        // Cockpit canopy (bright blue-green triangle)
+        ctx.fillStyle = '#70c8d8';
+        ctx.beginPath();
+        ctx.moveTo(r * 0.7, 0);
+        ctx.lineTo(r * 0.25, -r * 0.1);
+        ctx.lineTo(r * 0.25, r * 0.1);
+        ctx.closePath();
+        ctx.fill();
+        // Canopy glint
+        ctx.fillStyle = 'rgba(200,240,255,0.5)';
+        ctx.beginPath();
+        ctx.moveTo(r * 0.6, -r * 0.02);
+        ctx.lineTo(r * 0.35, -r * 0.07);
+        ctx.lineTo(r * 0.35, r * 0.01);
+        ctx.closePath();
+        ctx.fill();
+
+        // Panel lines on fuselage
+        ctx.strokeStyle = 'rgba(20,40,60,0.4)';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(r * 0.2, -r * 0.25);
+        ctx.lineTo(r * 0.2, r * 0.25);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.3, -r * 0.24);
+        ctx.lineTo(-r * 0.3, r * 0.24);
         ctx.stroke();
 
-        // Engine glow
-        if (anim > 0.5) {
-          const glowIntensity = (anim - 0.5) * 2;
-          ctx.fillStyle = `rgba(100,200,255,${glowIntensity * 0.8})`;
-          ctx.beginPath();
-          ctx.moveTo(-r * 0.5, 0);
-          ctx.lineTo(-r * 0.8, -r * 0.3);
-          ctx.lineTo(-r - r * glowIntensity * 0.8, 0);
-          ctx.lineTo(-r * 0.8, r * 0.3);
-          ctx.closePath();
-          ctx.fill();
-        }
+        // Nose cannon mount
+        ctx.fillStyle = '#3a5060';
+        ctx.fillRect(r * 0.95, -r * 0.05, r * 0.4, r * 0.1);
+
+        // Outline
+        ctx.strokeStyle = selected ? '#ffffff' : 'rgba(80,160,220,0.6)';
+        ctx.lineWidth = selected ? 1.5 : 0.7;
+        ctx.beginPath();
+        ctx.moveTo(r * 1.3, 0);
+        ctx.lineTo(r * 0.4, -r * 0.22);
+        ctx.lineTo(-r * 0.1, -r * 0.28);
+        ctx.lineTo(-r * 0.7, -r * 0.2);
+        ctx.lineTo(-r * 0.85, 0);
+        ctx.lineTo(-r * 0.7, r * 0.2);
+        ctx.lineTo(-r * 0.1, r * 0.28);
+        ctx.lineTo(r * 0.4, r * 0.22);
+        ctx.closePath();
+        ctx.stroke();
 
         // Muzzle flash on attack
-        if (anim > 0.6) {
-          const flashSize = (anim - 0.6) * 2.5 * r;
-          ctx.fillStyle = `rgba(180,230,255,${(anim - 0.6) * 2.5})`;
+        if (anim > 0.5) {
+          const fi = (anim - 0.5) * 2;
+          ctx.fillStyle = `rgba(140,210,255,${fi * 0.9})`;
           ctx.beginPath();
-          ctx.arc(r + 3, 0, flashSize * 0.6, 0, Math.PI * 2);
+          ctx.arc(r * 1.35, 0, r * 0.5 * fi, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = `rgba(220,240,255,${fi * 0.7})`;
+          ctx.beginPath();
+          ctx.arc(r * 1.35, 0, r * 0.25 * fi, 0, Math.PI * 2);
           ctx.fill();
         }
 
         ctx.restore();
       } else if (u.type === 2) {
-        // Destroyer - recoil on attack
+        // ── DESTROYER: Long rectangular warship with turrets (realistic) ──
         const moveAngle = Math.atan2(u.vy, u.vx) || 0;
-        const recoil = anim > 0.5 ? (anim - 0.5) * 2 * 4 : 0;
+        const recoil = anim > 0.5 ? (anim - 0.5) * 2 * 3 : 0;
         const atkDir = u.attackAngle || moveAngle;
         const rx = u.x - Math.cos(atkDir) * recoil;
         const ry = u.y - Math.sin(atkDir) * recoil;
@@ -1589,43 +1742,188 @@ const App = () => {
         ctx.translate(rx, ry);
         ctx.rotate(moveAngle);
 
-        // Main hull (rectangle body)
-        ctx.fillRect(-r, -r * 0.75, r * 2, r * 1.5);
-        ctx.strokeRect(-r, -r * 0.75, r * 2, r * 1.5);
+        const t = performance.now() * 0.001;
+        const engineFlicker = 0.5 + Math.sin(t * 10) * 0.2;
 
-        // Bridge/cockpit
-        ctx.fillStyle = colors.light;
-        ctx.fillRect(-r * 0.4, -r * 0.35, r * 0.8, r * 0.7);
+        // Engine exhaust glow (3 thrusters at rear)
+        for (let i = -1; i <= 1; i++) {
+          const exG = ctx.createRadialGradient(-r * 1.45, i * r * 0.28, 0, -r * 1.45, i * r * 0.28, r * 0.3);
+          exG.addColorStop(0, `rgba(100,180,255,${engineFlicker * 0.6})`);
+          exG.addColorStop(0.6, `rgba(60,120,200,${engineFlicker * 0.25})`);
+          exG.addColorStop(1, 'rgba(30,60,150,0)');
+          ctx.fillStyle = exG;
+          ctx.beginPath();
+          ctx.arc(-r * 1.45, i * r * 0.28, r * 0.3, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
-        // Cannon barrel
-        ctx.fillStyle = colors.dark;
-        ctx.fillRect(r * 0.6, -r * 0.2, r * 0.8, r * 0.4);
-        ctx.strokeStyle = selected ? '#ffffff' : colors.light;
-        ctx.strokeRect(r * 0.6, -r * 0.2, r * 0.8, r * 0.4);
+        // Main hull (long dark grey rectangle with tapered bow)
+        ctx.fillStyle = '#3a3a40';
+        ctx.beginPath();
+        ctx.moveTo(r * 1.5, 0);
+        ctx.lineTo(r * 1.0, -r * 0.3);
+        ctx.lineTo(r * 0.5, -r * 0.45);
+        ctx.lineTo(-r * 0.9, -r * 0.5);
+        ctx.lineTo(-r * 1.25, -r * 0.4);
+        ctx.lineTo(-r * 1.35, -r * 0.25);
+        ctx.lineTo(-r * 1.35, r * 0.25);
+        ctx.lineTo(-r * 1.25, r * 0.4);
+        ctx.lineTo(-r * 0.9, r * 0.5);
+        ctx.lineTo(r * 0.5, r * 0.45);
+        ctx.lineTo(r * 1.0, r * 0.3);
+        ctx.closePath();
+        ctx.fill();
 
-        // Engine thrusters
-        ctx.fillStyle = colors.dark;
-        ctx.fillRect(-r * 1.1, -r * 0.6, r * 0.3, r * 0.3);
-        ctx.fillRect(-r * 1.1, r * 0.3, r * 0.3, r * 0.3);
+        // Hull upper armor plate (lighter grey)
+        ctx.fillStyle = '#4a4a52';
+        ctx.beginPath();
+        ctx.moveTo(r * 1.3, -r * 0.05);
+        ctx.lineTo(r * 0.5, -r * 0.38);
+        ctx.lineTo(-r * 0.9, -r * 0.42);
+        ctx.lineTo(-r * 1.2, -r * 0.3);
+        ctx.lineTo(-r * 1.2, -r * 0.05);
+        ctx.closePath();
+        ctx.fill();
+
+        // Hull bottom plate (darkest)
+        ctx.fillStyle = '#2a2a30';
+        ctx.beginPath();
+        ctx.moveTo(r * 1.3, r * 0.05);
+        ctx.lineTo(r * 0.5, r * 0.38);
+        ctx.lineTo(-r * 0.9, r * 0.42);
+        ctx.lineTo(-r * 1.2, r * 0.3);
+        ctx.lineTo(-r * 1.2, r * 0.05);
+        ctx.closePath();
+        ctx.fill();
+
+        // Center stripe (grey highlight running length of hull)
+        ctx.fillStyle = '#555560';
+        ctx.fillRect(-r * 1.0, -r * 0.06, r * 2.2, r * 0.12);
+
+        // Red accent stripes (port/starboard markings)
+        ctx.fillStyle = '#8a2020';
+        ctx.fillRect(-r * 0.6, -r * 0.44, r * 0.3, r * 0.04);
+        ctx.fillRect(-r * 0.6, r * 0.40, r * 0.3, r * 0.04);
+        ctx.fillRect(r * 0.1, -r * 0.38, r * 0.25, r * 0.03);
+        ctx.fillRect(r * 0.1, r * 0.35, r * 0.25, r * 0.03);
+
+        // Bridge superstructure (raised block near rear)
+        ctx.fillStyle = '#48484f';
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.2, -r * 0.28);
+        ctx.lineTo(-r * 0.6, -r * 0.3);
+        ctx.lineTo(-r * 0.7, -r * 0.22);
+        ctx.lineTo(-r * 0.7, r * 0.22);
+        ctx.lineTo(-r * 0.6, r * 0.3);
+        ctx.lineTo(-r * 0.2, r * 0.28);
+        ctx.lineTo(-r * 0.15, r * 0.18);
+        ctx.lineTo(-r * 0.15, -r * 0.18);
+        ctx.closePath();
+        ctx.fill();
+        // Bridge windows
+        ctx.fillStyle = 'rgba(180,220,255,0.4)';
+        ctx.fillRect(-r * 0.55, -r * 0.16, r * 0.3, r * 0.04);
+        ctx.fillRect(-r * 0.55, r * 0.12, r * 0.3, r * 0.04);
+
+        // Forward turret (main gun)
+        ctx.fillStyle = '#505058';
+        ctx.beginPath();
+        ctx.arc(r * 0.55, 0, r * 0.16, 0, Math.PI * 2);
+        ctx.fill();
+        // Turret barrel
+        ctx.fillStyle = '#3a3a42';
+        ctx.fillRect(r * 0.55, -r * 0.05, r * 0.7, r * 0.1);
+        ctx.strokeStyle = '#2a2a30';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(r * 0.55, -r * 0.05, r * 0.7, r * 0.1);
+
+        // Broadside gun turrets (upper)
+        ctx.fillStyle = '#505058';
+        const turretPositions = [-r * 0.1, r * 0.25, -r * 0.45];
+        for (const tx of turretPositions) {
+          // Upper turret
+          ctx.beginPath();
+          ctx.arc(tx, -r * 0.42, r * 0.09, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillRect(tx, -r * 0.45, r * 0.3, r * 0.06);
+          // Lower turret
+          ctx.beginPath();
+          ctx.arc(tx, r * 0.42, r * 0.09, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillRect(tx, r * 0.39, r * 0.3, r * 0.06);
+        }
+
+        // Running lights (orange dots along hull)
+        ctx.fillStyle = `rgba(255,180,60,${0.5 + Math.sin(t * 3) * 0.3})`;
+        const lightPosX = [-r * 0.8, -r * 0.4, 0, r * 0.4, r * 0.8];
+        for (const lx of lightPosX) {
+          ctx.beginPath();
+          ctx.arc(lx, -r * 0.48, r * 0.03, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(lx, r * 0.48, r * 0.03, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Panel lines
+        ctx.strokeStyle = 'rgba(20,20,25,0.35)';
+        ctx.lineWidth = 0.4;
+        for (let i = -2; i <= 3; i++) {
+          const px2 = i * r * 0.35;
+          ctx.beginPath();
+          ctx.moveTo(px2, -r * 0.48);
+          ctx.lineTo(px2, r * 0.48);
+          ctx.stroke();
+        }
+
+        // Engine housings (rear blocks)
+        ctx.fillStyle = '#2e2e34';
+        ctx.fillRect(-r * 1.3, -r * 0.4, r * 0.15, r * 0.8);
+
+        // Outline
+        ctx.strokeStyle = selected ? '#ffffff' : 'rgba(120,130,140,0.5)';
+        ctx.lineWidth = selected ? 1.5 : 0.6;
+        ctx.beginPath();
+        ctx.moveTo(r * 1.5, 0);
+        ctx.lineTo(r * 1.0, -r * 0.3);
+        ctx.lineTo(r * 0.5, -r * 0.45);
+        ctx.lineTo(-r * 0.9, -r * 0.5);
+        ctx.lineTo(-r * 1.25, -r * 0.4);
+        ctx.lineTo(-r * 1.35, -r * 0.25);
+        ctx.lineTo(-r * 1.35, r * 0.25);
+        ctx.lineTo(-r * 1.25, r * 0.4);
+        ctx.lineTo(-r * 0.9, r * 0.5);
+        ctx.lineTo(r * 0.5, r * 0.45);
+        ctx.lineTo(r * 1.0, r * 0.3);
+        ctx.closePath();
+        ctx.stroke();
 
         // Muzzle flash on attack
         if (anim > 0.5) {
-          const flashIntensity = (anim - 0.5) * 2;
-          const flashR = r * 0.8 * flashIntensity;
-          ctx.fillStyle = `rgba(255,200,100,${flashIntensity * 0.9})`;
+          const fi = (anim - 0.5) * 2;
+          ctx.fillStyle = `rgba(255,200,100,${fi * 0.9})`;
           ctx.beginPath();
-          ctx.arc(r * 1.4, 0, flashR, 0, Math.PI * 2);
+          ctx.arc(r * 1.3, 0, r * 0.5 * fi, 0, Math.PI * 2);
           ctx.fill();
-          ctx.fillStyle = `rgba(255,255,200,${flashIntensity * 0.6})`;
+          ctx.fillStyle = `rgba(255,255,200,${fi * 0.6})`;
           ctx.beginPath();
-          ctx.arc(r * 1.4, 0, flashR * 0.5, 0, Math.PI * 2);
+          ctx.arc(r * 1.3, 0, r * 0.25 * fi, 0, Math.PI * 2);
           ctx.fill();
+          // Broadside flash
+          for (const tx of turretPositions) {
+            ctx.fillStyle = `rgba(255,180,80,${fi * 0.5})`;
+            ctx.beginPath();
+            ctx.arc(tx + r * 0.3, -r * 0.45, r * 0.12 * fi, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(tx + r * 0.3, r * 0.45, r * 0.12 * fi, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
 
         ctx.restore();
       } else {
-        // Battleship - large capital ship shape
-        const atkAngle = u.attackAngle || 0;
+        // ── BATTLESHIP: Massive wedge-shaped capital ship (Star Destroyer style, realistic) ──
         const angle = Math.atan2(u.vy, u.vx) || 0;
         const recoil = anim > 0.5 ? (anim - 0.5) * 2 * 2 : 0;
 
@@ -1633,10 +1931,13 @@ const App = () => {
         ctx.translate(u.x - Math.cos(angle) * recoil, u.y - Math.sin(angle) * recoil);
         ctx.rotate(angle);
 
+        const t = performance.now() * 0.001;
+        const engineFlicker = 0.5 + Math.sin(t * 8) * 0.15;
+
         // Attack glow aura
         if (anim > 0) {
           const grad = ctx.createRadialGradient(0, 0, r * 0.5, 0, 0, r * 2.5);
-          grad.addColorStop(0, `rgba(${u.owner === 2 ? '255,100,120' : '100,180,255'},${anim * 0.4})`);
+          grad.addColorStop(0, `rgba(100,180,255,${anim * 0.35})`);
           grad.addColorStop(1, 'rgba(0,0,0,0)');
           ctx.fillStyle = grad;
           ctx.beginPath();
@@ -1644,129 +1945,218 @@ const App = () => {
           ctx.fill();
         }
 
-        ctx.fillStyle = colors.main;
-        ctx.strokeStyle = selected ? '#ffffff' : colors.light;
-        ctx.lineWidth = selected ? 2 : 1;
+        // Engine exhaust glow (wide rear)
+        for (let i = -2; i <= 2; i++) {
+          const exG = ctx.createRadialGradient(-r * 1.15, i * r * 0.18, 0, -r * 1.15, i * r * 0.18, r * 0.25);
+          exG.addColorStop(0, `rgba(100,180,255,${engineFlicker * 0.5})`);
+          exG.addColorStop(0.5, `rgba(60,120,200,${engineFlicker * 0.2})`);
+          exG.addColorStop(1, 'rgba(30,60,150,0)');
+          ctx.fillStyle = exG;
+          ctx.beginPath();
+          ctx.arc(-r * 1.15, i * r * 0.18, r * 0.25, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
-        // Main hull - elongated hexagonal capital ship
+        // Main wedge hull (dark grey)
+        ctx.fillStyle = '#3e3e44';
         ctx.beginPath();
-        ctx.moveTo(r * 1.6, 0);           // Bow tip
-        ctx.lineTo(r * 0.8, -r * 0.5);    // Front upper
-        ctx.lineTo(r * 0.3, -r * 0.7);    // Upper shoulder
-        ctx.lineTo(-r * 0.8, -r * 0.7);   // Upper rear
-        ctx.lineTo(-r * 1.3, -r * 0.4);   // Rear upper taper
-        ctx.lineTo(-r * 1.3, r * 0.4);    // Rear lower taper
-        ctx.lineTo(-r * 0.8, r * 0.7);    // Lower rear
-        ctx.lineTo(r * 0.3, r * 0.7);     // Lower shoulder
-        ctx.lineTo(r * 0.8, r * 0.5);     // Front lower
+        ctx.moveTo(r * 1.7, 0);               // Sharp bow tip
+        ctx.lineTo(r * 0.6, -r * 0.35);
+        ctx.lineTo(-r * 0.2, -r * 0.65);
+        ctx.lineTo(-r * 0.7, -r * 0.72);
+        ctx.lineTo(-r * 1.0, -r * 0.65);
+        ctx.lineTo(-r * 1.1, -r * 0.5);
+        ctx.lineTo(-r * 1.1, r * 0.5);
+        ctx.lineTo(-r * 1.0, r * 0.65);
+        ctx.lineTo(-r * 0.7, r * 0.72);
+        ctx.lineTo(-r * 0.2, r * 0.65);
+        ctx.lineTo(r * 0.6, r * 0.35);
         ctx.closePath();
         ctx.fill();
-        ctx.stroke();
 
-        // Bridge / command tower (raised center section)
-        ctx.fillStyle = colors.light;
+        // Upper armor plate (lighter, top surface)
+        ctx.fillStyle = '#4a4a50';
         ctx.beginPath();
-        ctx.moveTo(r * 0.2, -r * 0.35);
-        ctx.lineTo(-r * 0.3, -r * 0.35);
-        ctx.lineTo(-r * 0.4, -r * 0.15);
-        ctx.lineTo(-r * 0.4, r * 0.15);
-        ctx.lineTo(-r * 0.3, r * 0.35);
-        ctx.lineTo(r * 0.2, r * 0.35);
-        ctx.lineTo(r * 0.3, r * 0.15);
-        ctx.lineTo(r * 0.3, -r * 0.15);
+        ctx.moveTo(r * 1.6, -r * 0.02);
+        ctx.lineTo(r * 0.6, -r * 0.32);
+        ctx.lineTo(-r * 0.2, -r * 0.6);
+        ctx.lineTo(-r * 0.7, -r * 0.66);
+        ctx.lineTo(-r * 1.0, -r * 0.58);
+        ctx.lineTo(-r * 1.05, -r * 0.1);
+        ctx.lineTo(r * 0.2, -r * 0.08);
         ctx.closePath();
         ctx.fill();
-        ctx.strokeStyle = colors.dark;
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
 
-        // Core reactor glow
-        const coreGlow = anim > 0 ? 0.8 + anim * 0.2 : 0.5;
-        ctx.fillStyle = `rgba(${u.owner === 2 ? '255,180,180' : '180,220,255'},${coreGlow})`;
+        // Bottom shadow plate
+        ctx.fillStyle = '#2a2a30';
         ctx.beginPath();
-        ctx.arc(-0.05 * r, 0, r * 0.2, 0, Math.PI * 2);
+        ctx.moveTo(r * 1.6, r * 0.02);
+        ctx.lineTo(r * 0.6, r * 0.32);
+        ctx.lineTo(-r * 0.2, r * 0.6);
+        ctx.lineTo(-r * 0.7, r * 0.66);
+        ctx.lineTo(-r * 1.0, r * 0.58);
+        ctx.lineTo(-r * 1.05, r * 0.1);
+        ctx.lineTo(r * 0.2, r * 0.08);
+        ctx.closePath();
         ctx.fill();
 
-        // Forward main cannons (2 barrels)
-        ctx.strokeStyle = selected ? '#ffffff' : colors.light;
-        ctx.lineWidth = selected ? 2 : 1;
-        ctx.fillStyle = colors.dark;
-        // Upper cannon
-        ctx.fillRect(r * 0.5, -r * 0.45, r * 0.9, r * 0.18);
-        ctx.strokeRect(r * 0.5, -r * 0.45, r * 0.9, r * 0.18);
-        // Lower cannon
-        ctx.fillRect(r * 0.5, r * 0.27, r * 0.9, r * 0.18);
-        ctx.strokeRect(r * 0.5, r * 0.27, r * 0.9, r * 0.18);
-
-        // Side turrets (port & starboard)
-        ctx.fillStyle = colors.dark;
-        // Top turret
-        ctx.save();
-        ctx.translate(-r * 0.1, -r * 0.65);
-        ctx.fillRect(-r * 0.15, -r * 0.1, r * 0.3, r * 0.2);
-        ctx.fillRect(r * 0.15, -r * 0.06, r * 0.35, r * 0.12);
-        ctx.restore();
-        // Bottom turret
-        ctx.save();
-        ctx.translate(-r * 0.1, r * 0.65);
-        ctx.fillRect(-r * 0.15, -r * 0.1, r * 0.3, r * 0.2);
-        ctx.fillRect(r * 0.15, -r * 0.06, r * 0.35, r * 0.12);
-        ctx.restore();
-
-        // Engine thrusters (rear)
-        const engineGlow = 0.4 + Math.sin(performance.now() * 0.005) * 0.15;
-        ctx.fillStyle = `rgba(${u.owner === 2 ? '255,140,100' : '100,180,255'},${engineGlow})`;
-        ctx.fillRect(-r * 1.5, -r * 0.3, r * 0.25, r * 0.15);
-        ctx.fillRect(-r * 1.5, r * 0.15, r * 0.25, r * 0.15);
-        ctx.fillRect(-r * 1.5, -r * 0.08, r * 0.2, r * 0.16);
-
-        // Engine housing
-        ctx.fillStyle = colors.dark;
-        ctx.fillRect(-r * 1.3, -r * 0.35, r * 0.15, r * 0.7);
-
-        // Armor panel lines
-        ctx.strokeStyle = `rgba(255,255,255,0.15)`;
+        // Surface trench lines (Star Destroyer style details)
+        ctx.strokeStyle = 'rgba(20,20,25,0.4)';
         ctx.lineWidth = 0.5;
+        // Horizontal trenches
         ctx.beginPath();
-        ctx.moveTo(r * 0.3, -r * 0.68);
-        ctx.lineTo(r * 0.3, r * 0.68);
-        ctx.moveTo(-r * 0.5, -r * 0.68);
-        ctx.lineTo(-r * 0.5, r * 0.68);
+        ctx.moveTo(r * 1.2, -r * 0.08);
+        ctx.lineTo(-r * 1.0, -r * 0.55);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(r * 1.2, r * 0.08);
+        ctx.lineTo(-r * 1.0, r * 0.55);
+        ctx.stroke();
+        // Vertical panel lines
+        for (let i = -2; i <= 3; i++) {
+          const px2 = i * r * 0.32;
+          const halfW = Math.max(0.05, (r * 1.7 - Math.abs(px2)) / (r * 1.7)) * r * 0.72;
+          ctx.beginPath();
+          ctx.moveTo(px2, -halfW);
+          ctx.lineTo(px2, halfW);
+          ctx.stroke();
+        }
+
+        // Surface detail blocks (raised structures)
+        ctx.fillStyle = '#505058';
+        ctx.fillRect(-r * 0.6, -r * 0.5, r * 0.15, r * 1.0);
+        ctx.fillRect(-r * 0.15, -r * 0.42, r * 0.12, r * 0.84);
+        ctx.fillRect(r * 0.25, -r * 0.3, r * 0.1, r * 0.6);
+
+        // Bridge tower (superstructure rising from hull, near rear)
+        ctx.fillStyle = '#48484e';
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.35, -r * 0.25);
+        ctx.lineTo(-r * 0.55, -r * 0.28);
+        ctx.lineTo(-r * 0.6, -r * 0.42);
+        ctx.lineTo(-r * 0.5, -r * 0.48);
+        ctx.lineTo(-r * 0.3, -r * 0.45);
+        ctx.lineTo(-r * 0.25, -r * 0.32);
+        ctx.closePath();
+        ctx.fill();
+        // Bridge tower front face
+        ctx.fillStyle = '#555560';
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.3, -r * 0.45);
+        ctx.lineTo(-r * 0.25, -r * 0.32);
+        ctx.lineTo(-r * 0.35, -r * 0.25);
+        ctx.lineTo(-r * 0.4, -r * 0.38);
+        ctx.closePath();
+        ctx.fill();
+        // Bridge windows
+        ctx.fillStyle = 'rgba(160,210,255,0.45)';
+        ctx.fillRect(-r * 0.48, -r * 0.44, r * 0.15, r * 0.025);
+        ctx.fillRect(-r * 0.46, -r * 0.40, r * 0.12, r * 0.02);
+
+        // Main forward cannons (2 heavy turrets)
+        ctx.fillStyle = '#404048';
+        // Upper heavy turret
+        ctx.beginPath();
+        ctx.arc(r * 0.5, -r * 0.2, r * 0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillRect(r * 0.5, -r * 0.24, r * 0.7, r * 0.08);
+        // Lower heavy turret
+        ctx.beginPath();
+        ctx.arc(r * 0.5, r * 0.2, r * 0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillRect(r * 0.5, r * 0.16, r * 0.7, r * 0.08);
+
+        // Medium turrets along sides
+        ctx.fillStyle = '#3a3a42';
+        const sideTurrets = [
+          { x: r * 0.15, y: -r * 0.55 }, { x: -r * 0.2, y: -r * 0.6 },
+          { x: r * 0.15, y: r * 0.55 }, { x: -r * 0.2, y: r * 0.6 },
+        ];
+        for (const st of sideTurrets) {
+          ctx.beginPath();
+          ctx.arc(st.x, st.y, r * 0.07, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillRect(st.x, st.y - r * 0.03, r * 0.25, r * 0.06);
+        }
+
+        // Point-defense turret dots (small)
+        ctx.fillStyle = '#555560';
+        const pdPositions = [
+          { x: r * 0.8, y: -r * 0.15 }, { x: r * 0.8, y: r * 0.15 },
+          { x: -r * 0.5, y: -r * 0.55 }, { x: -r * 0.5, y: r * 0.55 },
+        ];
+        for (const pd of pdPositions) {
+          ctx.beginPath();
+          ctx.arc(pd.x, pd.y, r * 0.04, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Engine housing block (rear)
+        ctx.fillStyle = '#2e2e34';
+        ctx.fillRect(-r * 1.08, -r * 0.48, r * 0.12, r * 0.96);
+
+        // Running lights
+        ctx.fillStyle = `rgba(255,180,60,${0.4 + Math.sin(t * 2.5) * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(-r * 0.7, -r * 0.7, r * 0.03, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(-r * 0.7, r * 0.7, r * 0.03, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(r * 1.5, 0, r * 0.025, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Hull outline
+        ctx.strokeStyle = selected ? '#ffffff' : 'rgba(100,110,120,0.5)';
+        ctx.lineWidth = selected ? 1.5 : 0.6;
+        ctx.beginPath();
+        ctx.moveTo(r * 1.7, 0);
+        ctx.lineTo(r * 0.6, -r * 0.35);
+        ctx.lineTo(-r * 0.2, -r * 0.65);
+        ctx.lineTo(-r * 0.7, -r * 0.72);
+        ctx.lineTo(-r * 1.0, -r * 0.65);
+        ctx.lineTo(-r * 1.1, -r * 0.5);
+        ctx.lineTo(-r * 1.1, r * 0.5);
+        ctx.lineTo(-r * 1.0, r * 0.65);
+        ctx.lineTo(-r * 0.7, r * 0.72);
+        ctx.lineTo(-r * 0.2, r * 0.65);
+        ctx.lineTo(r * 0.6, r * 0.35);
+        ctx.closePath();
         ctx.stroke();
 
         // Muzzle flash from main cannons on attack
         if (anim > 0.5) {
           const fi = (anim - 0.5) * 2;
-          const flashR = r * 0.5 * fi;
+          const flashR = r * 0.45 * fi;
           // Upper cannon flash
           ctx.fillStyle = `rgba(255,220,100,${fi * 0.9})`;
           ctx.beginPath();
-          ctx.arc(r * 1.5, -r * 0.36, flashR, 0, Math.PI * 2);
+          ctx.arc(r * 1.25, -r * 0.2, flashR, 0, Math.PI * 2);
           ctx.fill();
           // Lower cannon flash
           ctx.beginPath();
-          ctx.arc(r * 1.5, r * 0.36, flashR, 0, Math.PI * 2);
+          ctx.arc(r * 1.25, r * 0.2, flashR, 0, Math.PI * 2);
           ctx.fill();
-          // Bright core
+          // Core glow
           ctx.fillStyle = `rgba(255,255,220,${fi * 0.7})`;
           ctx.beginPath();
-          ctx.arc(r * 1.5, -r * 0.36, flashR * 0.4, 0, Math.PI * 2);
+          ctx.arc(r * 1.25, -r * 0.2, flashR * 0.4, 0, Math.PI * 2);
           ctx.fill();
           ctx.beginPath();
-          ctx.arc(r * 1.5, r * 0.36, flashR * 0.4, 0, Math.PI * 2);
+          ctx.arc(r * 1.25, r * 0.2, flashR * 0.4, 0, Math.PI * 2);
           ctx.fill();
         }
 
-        // Side turret flash on attack
+        // Side turret flash
         if (anim > 0.6) {
           const tf = (anim - 0.6) * 2.5;
-          ctx.fillStyle = `rgba(255,200,120,${tf * 0.8})`;
-          ctx.beginPath();
-          ctx.arc(r * 0.3, -r * 0.75, r * 0.2 * tf, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(r * 0.3, r * 0.75, r * 0.2 * tf, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.fillStyle = `rgba(255,200,120,${tf * 0.7})`;
+          for (const st of sideTurrets) {
+            ctx.beginPath();
+            ctx.arc(st.x + r * 0.25, st.y, r * 0.12 * tf, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
 
         ctx.restore();
