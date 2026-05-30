@@ -1615,7 +1615,7 @@ const App = () => {
           } else if (u.type === 2) {
             // 구축함 (nose RIGHT): engines at left → flames extend in -X direction
             for (let side = -1; side <= 1; side += 2) {
-              const exY = side * drawH * 0.28;
+              const exY = side * drawH * 0.16;
               const exX = -drawW * 0.45;
               const flameLen = drawW * 0.30 * flickerLen;
               const flameGrad = ctx.createLinearGradient(exX, exY, exX - flameLen, exY);
@@ -1632,9 +1632,9 @@ const App = () => {
               ctx.fill();
             }
           } else {
-            // 전함 (nose UP): 5 engines at bottom → flames extend in +Y direction
-            const engineCount = 5;
-            const spacing = drawW * 0.16;
+            // 전함 (nose UP): 2 engines at bottom → flames extend in +Y direction
+            const engineCount = 2;
+            const spacing = drawW * 0.09;
             const startX = -(engineCount - 1) * spacing / 2;
             for (let i = 0; i < engineCount; i++) {
               const exX = startX + i * spacing;
