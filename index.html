@@ -116,12 +116,30 @@ const AUDIO_FILES = {
     3: '아군 유닛 사운드/전함 파괴 1.mp3',
   },
 };
+const BGM_FILES = {
+  start: 'BGM/메인화면.mp3',
+  victory: 'BGM/승리화면.mp3',
+  defeat: 'BGM/패배화면.mp3',
+};
+const SFX_CUTOFF_PREFIX = '아군 유닛 사운드/';
+const SFX_CUTOFF_RATIO = 0.8;
 
 function createSoundPool(src, size) {
   const pool = [];
+  const shouldCut = src.startsWith(SFX_CUTOFF_PREFIX);
   for (let i = 0; i < size; i++) {
     const audio = new Audio(src);
     audio.preload = 'auto';
+    if (shouldCut) {
+      audio.addEventListener('timeupdate', () => {
+        const duration = audio.duration;
+        if (!Number.isFinite(duration) || duration <= 0) return;
+        if (audio.currentTime >= duration * SFX_CUTOFF_RATIO) {
+          audio.pause();
+          audio.currentTime = 0;
+        }
+      });
+    }
     pool.push(audio);
   }
   return pool;
@@ -138,6 +156,8 @@ function createAudioManager() {
   const MAX_SFX_VOLUME = 0.9;
   let masterVolume = 0.8;
   let sfxVolume = 0.8;
+  const lastPlayedAt = new Map();
+  const SAME_SOUND_COOLDOWN_MS = 100;
 
   const setVolumes = (nextMaster, nextSfx) => {
     masterVolume = nextMaster;
@@ -153,6 +173,11 @@ function createAudioManager() {
   const play = (kind, type) => {
     const pool = pools[kind]?.[type];
     if (!pool) return;
+    const now = performance.now ? performance.now() : Date.now();
+    const key = `${kind}:${type}`;
+    const lastAt = lastPlayedAt.get(key) ?? -Infinity;
+    if (now - lastAt < SAME_SOUND_COOLDOWN_MS) return;
+    lastPlayedAt.set(key, now);
     const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME;
     for (const audio of pool) {
       if (audio.paused || audio.ended) {
@@ -173,6 +198,52 @@ function createAudioManager() {
 }
 
 const AUDIO_MANAGER = createAudioManager();
+
+function createBgmManager() {
+  const tracks = {};
+  for (const [key, src] of Object.entries(BGM_FILES)) {
+    const audio = new Audio(src);
+    audio.preload = 'auto';
+    audio.loop = true;
+    tracks[key] = audio;
+  }
+
+  const MAX_BGM_VOLUME = 0.7;
+  let masterVolume = 0.8;
+  let currentKey = null;
+
+  const setVolume = (nextMaster) => {
+    masterVolume = nextMaster;
+    const vol = masterVolume * MAX_BGM_VOLUME;
+    for (const audio of Object.values(tracks)) {
+      audio.volume = vol;
+    }
+  };
+
+  const stopAll = () => {
+    for (const audio of Object.values(tracks)) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    currentKey = null;
+  };
+
+  const play = (key) => {
+    const audio = tracks[key];
+    if (!audio) return;
+    if (currentKey === key && !audio.paused) return;
+    stopAll();
+    currentKey = key;
+    audio.currentTime = 0;
+    audio.volume = masterVolume * MAX_BGM_VOLUME;
+    audio.play().catch(() => {});
+  };
+
+  setVolume(masterVolume);
+  return { play, stopAll, setVolume };
+}
+
+const BGM_MANAGER = createBgmManager();
 
 // ==================== HELPERS ====================
 let _idCounter = 0;
@@ -224,6 +295,25 @@ const App = () => {
   });
   const [pausePanel, setPausePanel] = useState('menu');
   const [volume, setVolume] = useState({ master: 0.8, sfx: 0.8 });
+  const uiRef = useRef({ phase: 'start', gameResult: '' });
+
+  const playPhaseBgm = useCallback((phase, gameResult) => {
+    if (phase === 'start') {
+      BGM_MANAGER.play('start');
+      return;
+    }
+    if (phase === 'gameover') {
+      if (gameResult === 'victory') {
+        BGM_MANAGER.play('victory');
+        return;
+      }
+      if (gameResult === 'defeat') {
+        BGM_MANAGER.play('defeat');
+        return;
+      }
+    }
+    BGM_MANAGER.stopAll();
+  }, []);
 
   // ==================== GAME INITIALIZATION ====================
   const initGame = useCallback(() => {
@@ -2324,8 +2414,30 @@ const App = () => {
   }, [ui.phase]);
 
   useEffect(() => {
+    uiRef.current = { phase: ui.phase, gameResult: ui.gameResult };
+  }, [ui.phase, ui.gameResult]);
+
+  useEffect(() => {
     AUDIO_MANAGER.setVolumes(volume.master, volume.sfx);
+    BGM_MANAGER.setVolume(volume.master);
   }, [volume]);
+
+  useEffect(() => {
+    playPhaseBgm(ui.phase, ui.gameResult);
+  }, [ui.phase, ui.gameResult, playPhaseBgm]);
+
+  useEffect(() => {
+    const onFirstGesture = () => {
+      const { phase, gameResult } = uiRef.current;
+      playPhaseBgm(phase, gameResult);
+    };
+    window.addEventListener('pointerdown', onFirstGesture, { once: true });
+    window.addEventListener('keydown', onFirstGesture, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('keydown', onFirstGesture);
+    };
+  }, [playPhaseBgm]);
 
   // ==================== JSX RENDER ====================
   const selectedPlanetData = ui.selectedPlanets;
