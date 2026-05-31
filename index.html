@@ -54,7 +54,7 @@ const { useState, useRef, useEffect, useCallback } = React;
 
 // ==================== CONSTANTS ====================
 const MAP_W = 3000;
-const MAP_H = 2000;
+const MAP_H = 1688;
 const BASE_POP = 100;
 const POP_PER_LEVEL = 5;
 const ATTACK_RANGE = 120;
@@ -85,8 +85,8 @@ const FACTION_COLORS = {
 };
 
 // Minimap
-const MM_W = 300;
-const MM_H = 300;
+const MM_W = 320;
+const MM_H = 180;
 const MM_MARGIN = 10;
 
 // ==================== SHIP IMAGES ====================
@@ -102,6 +102,77 @@ function preloadShipImages() {
   }
 }
 preloadShipImages();
+
+// ==================== AUDIO ====================
+const AUDIO_FILES = {
+  attack: {
+    1: '아군 유닛 사운드/요격기 공격sfx.mp3',
+    2: '아군 유닛 사운드/구축함 공격.mp3',
+    3: '아군 유닛 사운드/전함 공격 1 .mp3',
+  },
+  destroy: {
+    1: '아군 유닛 사운드/요격기 파괴 1.mp3',
+    2: '아군 유닛 사운드/구축함 파괴 1.mp3',
+    3: '아군 유닛 사운드/전함 파괴 1.mp3',
+  },
+};
+
+function createSoundPool(src, size) {
+  const pool = [];
+  for (let i = 0; i < size; i++) {
+    const audio = new Audio(src);
+    audio.preload = 'auto';
+    pool.push(audio);
+  }
+  return pool;
+}
+
+function createAudioManager() {
+  const pools = { attack: {}, destroy: {} };
+  const types = [1, 2, 3];
+  for (const type of types) {
+    pools.attack[type] = createSoundPool(AUDIO_FILES.attack[type], 5);
+    pools.destroy[type] = createSoundPool(AUDIO_FILES.destroy[type], 3);
+  }
+
+  const MAX_SFX_VOLUME = 0.9;
+  let masterVolume = 0.8;
+  let sfxVolume = 0.8;
+
+  const setVolumes = (nextMaster, nextSfx) => {
+    masterVolume = nextMaster;
+    sfxVolume = nextSfx;
+    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME;
+    for (const kind of Object.values(pools)) {
+      for (const pool of Object.values(kind)) {
+        for (const audio of pool) audio.volume = vol;
+      }
+    }
+  };
+
+  const play = (kind, type) => {
+    const pool = pools[kind]?.[type];
+    if (!pool) return;
+    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME;
+    for (const audio of pool) {
+      if (audio.paused || audio.ended) {
+        audio.currentTime = 0;
+        audio.volume = vol;
+        audio.play().catch(() => {});
+        return;
+      }
+    }
+    const fallback = pool[0];
+    fallback.currentTime = 0;
+    fallback.volume = vol;
+    fallback.play().catch(() => {});
+  };
+
+  setVolumes(masterVolume, sfxVolume);
+  return { play, setVolumes };
+}
+
+const AUDIO_MANAGER = createAudioManager();
 
 // ==================== HELPERS ====================
 let _idCounter = 0;
@@ -151,6 +222,8 @@ const App = () => {
     selectedUnitsCount: 0,
     controlGroupCounts: { 1: 0, 2: 0, 3: 0, 4: 0 },
   });
+  const [pausePanel, setPausePanel] = useState('menu');
+  const [volume, setVolume] = useState({ master: 0.8, sfx: 0.8 });
 
   // ==================== GAME INITIALIZATION ====================
   const initGame = useCallback(() => {
@@ -403,6 +476,7 @@ const App = () => {
       if (hasTarget && u.attackCooldown <= 0) {
         u.attackCooldown = 0.5;
         u.attackAnim = 1.0;
+        if (u.owner === 1) AUDIO_MANAGER.play('attack', u.type);
 
         if (unitTargets.length > 0) {
           u.attackAngle = Math.atan2(unitTargets[0].target.y - u.y, unitTargets[0].target.x - u.x);
@@ -511,6 +585,13 @@ const App = () => {
       // Clamp to map
       u.x = clamp(u.x, 5, MAP_W - 5);
       u.y = clamp(u.y, 5, MAP_H - 5);
+    }
+
+    for (const u of g.units) {
+      if (u.hp <= 0 && u.owner === 1 && !u.deathSoundPlayed) {
+        u.deathSoundPlayed = true;
+        AUDIO_MANAGER.play('destroy', u.type);
+      }
     }
 
     // Remove dead units
@@ -2238,6 +2319,14 @@ const App = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (ui.phase !== 'paused') setPausePanel('menu');
+  }, [ui.phase]);
+
+  useEffect(() => {
+    AUDIO_MANAGER.setVolumes(volume.master, volume.sfx);
+  }, [volume]);
+
   // ==================== JSX RENDER ====================
   const selectedPlanetData = ui.selectedPlanets;
   const hasSelectedPlanets = selectedPlanetData.length > 0;
@@ -2531,62 +2620,129 @@ const App = () => {
       {ui.phase === 'paused' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center"
              style={{ zIndex: 9999, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
+          {pausePanel === 'volume' && (
+            <button
+              onClick={() => setPausePanel('menu')}
+              style={{ position: 'absolute', top: 20, left: 20, padding: '8px 16px', borderRadius: 8,
+                       fontSize: 14, fontWeight: 'bold', background: '#1f2937', color: '#e5e7eb',
+                       border: '1px solid rgba(255,255,255,0.15)', cursor: 'pointer', zIndex: 10,
+                       display: 'flex', alignItems: 'center', gap: 8, transition: 'all 0.2s' }}
+              onMouseEnter={e => e.target.style.background = '#374151'}
+              onMouseLeave={e => e.target.style.background = '#1f2937'}>
+              <span>◀</span> 뒤로가기
+            </button>
+          )}
           <div className="flex flex-col items-center gap-6"
                style={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.15)',
                         borderRadius: 16, padding: '40px 48px', minWidth: 320,
                         boxShadow: '0 0 60px rgba(0,0,0,0.8)' }}>
             <h2 style={{ fontSize: 36, fontWeight: 'bold', color: '#fff', letterSpacing: '0.15em',
                          textShadow: '0 0 20px rgba(100,180,255,0.3)', marginBottom: 8 }}>
-              일시정지
+              {pausePanel === 'volume' ? '음량 조절' : '일시정지'}
             </h2>
             <div style={{ width: '100%', height: 1, background: 'rgba(255,255,255,0.1)', marginBottom: 8 }} />
-            <button
-              onClick={() => {
-                const g = G.current;
-                g.phase = 'playing';
-                g.lastFrameTime = performance.now();
-                setUi(prev => ({ ...prev, phase: 'playing' }));
-              }}
-              style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
-                       background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer',
-                       boxShadow: '0 0 15px rgba(68,153,255,0.3)', transition: 'all 0.2s' }}
-              onMouseEnter={e => e.target.style.background = '#3b82f6'}
-              onMouseLeave={e => e.target.style.background = '#2563eb'}>
-              계속하기
-            </button>
-            <button
-              onClick={() => {
-                const g = G.current;
-                g.phase = 'start';
-                g.gameResult = '';
-                setUi(prev => ({ ...prev, phase: 'start', gameResult: '' }));
-              }}
-              style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
-                       background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
-              onMouseEnter={e => e.target.style.background = '#4b5563'}
-              onMouseLeave={e => e.target.style.background = '#374151'}>
-              시작화면
-            </button>
-            <button
-              onClick={() => { initGame(); }}
-              style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
-                       background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
-              onMouseEnter={e => e.target.style.background = '#4b5563'}
-              onMouseLeave={e => e.target.style.background = '#374151'}>
-              다시하기
-            </button>
-            <button
-              onClick={() => {
-                const g = G.current;
-                g.phase = 'help';
-                setUi(prev => ({ ...prev, phase: 'help' }));
-              }}
-              style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
-                       background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
-              onMouseEnter={e => e.target.style.background = '#4b5563'}
-              onMouseLeave={e => e.target.style.background = '#374151'}>
-              도움말
-            </button>
+            {pausePanel === 'menu' ? (
+              <>
+                <button
+                  onClick={() => {
+                    const g = G.current;
+                    g.phase = 'playing';
+                    g.lastFrameTime = performance.now();
+                    setUi(prev => ({ ...prev, phase: 'playing' }));
+                  }}
+                  style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
+                           background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer',
+                           boxShadow: '0 0 15px rgba(68,153,255,0.3)', transition: 'all 0.2s' }}
+                  onMouseEnter={e => e.target.style.background = '#3b82f6'}
+                  onMouseLeave={e => e.target.style.background = '#2563eb'}>
+                  계속하기
+                </button>
+                <button
+                  onClick={() => {
+                    const g = G.current;
+                    g.phase = 'start';
+                    g.gameResult = '';
+                    setUi(prev => ({ ...prev, phase: 'start', gameResult: '' }));
+                  }}
+                  style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
+                           background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+                  onMouseEnter={e => e.target.style.background = '#4b5563'}
+                  onMouseLeave={e => e.target.style.background = '#374151'}>
+                  시작화면
+                </button>
+                <button
+                  onClick={() => setPausePanel('volume')}
+                  style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
+                           background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+                  onMouseEnter={e => e.target.style.background = '#4b5563'}
+                  onMouseLeave={e => e.target.style.background = '#374151'}>
+                  음량 조절
+                </button>
+                <button
+                  onClick={() => { initGame(); }}
+                  style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
+                           background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+                  onMouseEnter={e => e.target.style.background = '#4b5563'}
+                  onMouseLeave={e => e.target.style.background = '#374151'}>
+                  다시하기
+                </button>
+                <button
+                  onClick={() => {
+                    const g = G.current;
+                    g.phase = 'help';
+                    setUi(prev => ({ ...prev, phase: 'help' }));
+                  }}
+                  style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
+                           background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+                  onMouseEnter={e => e.target.style.background = '#4b5563'}
+                  onMouseLeave={e => e.target.style.background = '#374151'}>
+                  도움말
+                </button>
+              </>
+            ) : (
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ background: 'rgba(0,0,0,0.35)', borderRadius: 12, padding: '14px 16px',
+                              border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <div style={{ color: '#93c5fd', fontSize: 14, fontWeight: 'bold', marginBottom: 8 }}>전체 음량</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={Math.round(volume.master * 100)}
+                      onChange={(e) => {
+                        const next = Number(e.target.value) / 100;
+                        setVolume(prev => ({ ...prev, master: next }));
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                    <div style={{ width: 48, textAlign: 'right', color: '#e5e7eb', fontWeight: 'bold' }}>
+                      {Math.round(volume.master * 100)}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(0,0,0,0.35)', borderRadius: 12, padding: '14px 16px',
+                              border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <div style={{ color: '#a7f3d0', fontSize: 14, fontWeight: 'bold', marginBottom: 8 }}>효과음</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={Math.round(volume.sfx * 100)}
+                      onChange={(e) => {
+                        const next = Number(e.target.value) / 100;
+                        setVolume(prev => ({ ...prev, sfx: next }));
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                    <div style={{ width: 48, textAlign: 'right', color: '#e5e7eb', fontWeight: 'bold' }}>
+                      {Math.round(volume.sfx * 100)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
