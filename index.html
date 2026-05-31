@@ -53,8 +53,8 @@
 const { useState, useRef, useEffect, useCallback } = React;
 
 // ==================== CONSTANTS ====================
-const MAP_W = 3000;
-const MAP_H = 1688;
+const MAP_W = 2560;
+const MAP_H = 1440;
 const BASE_POP = 100;
 const POP_PER_LEVEL = 5;
 const ATTACK_RANGE = 120;
@@ -122,11 +122,13 @@ const BGM_FILES = {
   defeat: 'BGM/패배화면.mp3',
 };
 const SFX_CUTOFF_PREFIX = '아군 유닛 사운드/';
-const SFX_CUTOFF_RATIO = 0.8;
+const DEFAULT_SFX_CUTOFF_RATIO = 1.0;
+const INTERCEPTOR_ATTACK_CUTOFF_RATIO = 0.8;
 
 function createSoundPool(src, size) {
   const pool = [];
   const shouldCut = src.startsWith(SFX_CUTOFF_PREFIX);
+  const CUTOFF_FADE_MS = 120;
   for (let i = 0; i < size; i++) {
     const audio = new Audio(src);
     audio.preload = 'auto';
@@ -134,9 +136,29 @@ function createSoundPool(src, size) {
       audio.addEventListener('timeupdate', () => {
         const duration = audio.duration;
         if (!Number.isFinite(duration) || duration <= 0) return;
-        if (audio.currentTime >= duration * SFX_CUTOFF_RATIO) {
-          audio.pause();
-          audio.currentTime = 0;
+        const ratio = audio._cutoffRatio ?? DEFAULT_SFX_CUTOFF_RATIO;
+        if (ratio >= 1) return;
+        if (audio.currentTime >= duration * ratio) {
+          if (audio._cutoffFading) return;
+          audio._cutoffFading = true;
+          audio._cutoffToken = (audio._cutoffToken || 0) + 1;
+          const token = audio._cutoffToken;
+          const startVol = audio.volume;
+          const startAt = performance.now ? performance.now() : Date.now();
+          const step = (now) => {
+            if (audio._cutoffToken !== token) return;
+            const t = (now - startAt) / CUTOFF_FADE_MS;
+            if (t >= 1) {
+              audio.pause();
+              audio.currentTime = 0;
+              audio.volume = startVol;
+              audio._cutoffFading = false;
+              return;
+            }
+            audio.volume = startVol * (1 - t);
+            requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
         }
       });
     }
@@ -154,10 +176,102 @@ function createAudioManager() {
   }
 
   const MAX_SFX_VOLUME = 0.9;
+  const ATTACK_SOFTEN_FADE_MS = 40;
+  const SFX_TYPE_VOLUME = {
+    attack: {
+      1: 0.6,
+    },
+  };
   let masterVolume = 0.8;
   let sfxVolume = 0.8;
   const lastPlayedAt = new Map();
   const SAME_SOUND_COOLDOWN_MS = 100;
+  let audioContext = null;
+
+  const ensureAudioContext = () => {
+    if (!audioContext) {
+      const ContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!ContextClass) return null;
+      audioContext = new ContextClass();
+    }
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().catch(() => {});
+    }
+    return audioContext;
+  };
+
+  const playEnemyAttackSynth = (volume, type) => {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const duration = type === 3 ? 0.22 : type === 2 ? 0.18 : 0.14;
+    const base = type === 3 ? 220 : type === 2 ? 300 : 380;
+
+    const outGain = ctx.createGain();
+    outGain.gain.setValueAtTime(0.0001, now);
+    outGain.gain.linearRampToValueAtTime(volume, now + 0.01);
+    outGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(base * 1.4, now);
+    osc.frequency.exponentialRampToValueAtTime(base * 0.9, now + duration);
+
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(base * 0.6, now);
+    sub.frequency.exponentialRampToValueAtTime(base * 0.45, now + duration);
+
+    const noiseBuffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * 0.28;
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuffer;
+
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.setValueAtTime(base * 3.2, now);
+    lowpass.frequency.exponentialRampToValueAtTime(base * 1.6, now + duration);
+    lowpass.Q.setValueAtTime(0.7, now);
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.2, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.02, now + duration);
+
+    osc.connect(lowpass);
+    sub.connect(lowpass);
+    noise.connect(lowpass);
+    lowpass.connect(noiseGain);
+    noiseGain.connect(outGain);
+    outGain.connect(ctx.destination);
+
+    osc.start(now);
+    osc.stop(now + duration);
+    sub.start(now);
+    sub.stop(now + duration);
+    noise.start(now);
+    noise.stop(now + duration);
+  };
+
+  const applyAttackFadeIn = (audio, targetVolume) => {
+    audio._attackFadeToken = (audio._attackFadeToken || 0) + 1;
+    const token = audio._attackFadeToken;
+    const startAt = performance.now ? performance.now() : Date.now();
+    const step = (now) => {
+      if (audio._attackFadeToken !== token) return;
+      const t = (now - startAt) / ATTACK_SOFTEN_FADE_MS;
+      if (t >= 1) {
+        audio.volume = targetVolume;
+        return;
+      }
+      audio.volume = targetVolume * t;
+      requestAnimationFrame(step);
+    };
+    audio.volume = 0;
+    requestAnimationFrame(step);
+  };
 
   const setVolumes = (nextMaster, nextSfx) => {
     masterVolume = nextMaster;
@@ -178,23 +292,119 @@ function createAudioManager() {
     const lastAt = lastPlayedAt.get(key) ?? -Infinity;
     if (now - lastAt < SAME_SOUND_COOLDOWN_MS) return;
     lastPlayedAt.set(key, now);
-    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME;
+    const typeVol = SFX_TYPE_VOLUME[kind]?.[type] ?? 1;
+    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * typeVol;
     for (const audio of pool) {
+      if (audio._cutoffFading) continue;
       if (audio.paused || audio.ended) {
+        audio._cutoffToken = (audio._cutoffToken || 0) + 1;
+        audio._cutoffFading = false;
+        audio._cutoffRatio = (kind === 'attack' && type === 1)
+          ? INTERCEPTOR_ATTACK_CUTOFF_RATIO
+          : DEFAULT_SFX_CUTOFF_RATIO;
         audio.currentTime = 0;
-        audio.volume = vol;
+        if (kind === 'attack' && type === 1) {
+          applyAttackFadeIn(audio, vol);
+        } else {
+          audio.volume = vol;
+        }
         audio.play().catch(() => {});
         return;
       }
     }
     const fallback = pool[0];
+    fallback._cutoffToken = (fallback._cutoffToken || 0) + 1;
+    fallback._cutoffFading = false;
+    fallback._cutoffRatio = (kind === 'attack' && type === 1)
+      ? INTERCEPTOR_ATTACK_CUTOFF_RATIO
+      : DEFAULT_SFX_CUTOFF_RATIO;
+    fallback.pause();
     fallback.currentTime = 0;
-    fallback.volume = vol;
+    if (kind === 'attack' && type === 1) {
+      applyAttackFadeIn(fallback, vol);
+    } else {
+      fallback.volume = vol;
+    }
     fallback.play().catch(() => {});
   };
 
+  const playEnemyAttack = (type) => {
+    const now = performance.now ? performance.now() : Date.now();
+    const key = `enemy-attack:${type}`;
+    const lastAt = lastPlayedAt.get(key) ?? -Infinity;
+    if (now - lastAt < SAME_SOUND_COOLDOWN_MS) return;
+    lastPlayedAt.set(key, now);
+    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 0.6;
+    playEnemyAttackSynth(vol, type);
+  };
+
+  const playEnemyDeathSynth = (volume, type) => {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const duration = type === 3 ? 0.6 : type === 2 ? 0.48 : 0.38;
+    const base = type === 3 ? 180 : type === 2 ? 230 : 280;
+
+    const outGain = ctx.createGain();
+    outGain.gain.setValueAtTime(0.0001, now);
+    outGain.gain.linearRampToValueAtTime(volume, now + 0.03);
+    outGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+    const growl = ctx.createOscillator();
+    growl.type = 'sawtooth';
+    growl.frequency.setValueAtTime(base * 1.2, now);
+    growl.frequency.exponentialRampToValueAtTime(base * 0.5, now + duration);
+
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(base * 0.5, now);
+    sub.frequency.exponentialRampToValueAtTime(base * 0.28, now + duration);
+
+    const noiseBuffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * 0.35;
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuffer;
+
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.setValueAtTime(base * 2.6, now);
+    lowpass.frequency.exponentialRampToValueAtTime(base * 1.0, now + duration);
+    lowpass.Q.setValueAtTime(0.8, now);
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.3, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.02, now + duration * 0.8);
+
+    growl.connect(lowpass);
+    sub.connect(lowpass);
+    noise.connect(lowpass);
+    lowpass.connect(noiseGain);
+    noiseGain.connect(outGain);
+    outGain.connect(ctx.destination);
+
+    growl.start(now);
+    growl.stop(now + duration);
+    sub.start(now);
+    sub.stop(now + duration);
+    noise.start(now);
+    noise.stop(now + duration);
+  };
+
+  const playEnemyDeath = (type) => {
+    const now = performance.now ? performance.now() : Date.now();
+    const key = `enemy-death:${type}`;
+    const lastAt = lastPlayedAt.get(key) ?? -Infinity;
+    if (now - lastAt < SAME_SOUND_COOLDOWN_MS) return;
+    lastPlayedAt.set(key, now);
+    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 0.65;
+    playEnemyDeathSynth(vol, type);
+  };
+
   setVolumes(masterVolume, sfxVolume);
-  return { play, setVolumes };
+  return { play, playEnemyAttack, playEnemyDeath, setVolumes };
 }
 
 const AUDIO_MANAGER = createAudioManager();
@@ -334,12 +544,12 @@ const App = () => {
     g.stats = { produced: {1:0,2:0,3:0}, kills: {1:0,2:0,3:0}, goldEarned: 0, planetsCaptured: 0 };
 
     // Player planets (left side)
-    g.planets.push(createPlanet(350, 650, 1, 1000));
-    g.planets.push(createPlanet(350, 1350, 1, 1000));
+    g.planets.push(createPlanet(298, 554, 1, 1000));
+    g.planets.push(createPlanet(298, 1152, 1, 1000));
 
     // AI planets (right side)
-    g.planets.push(createPlanet(2650, 650, 2, 1000));
-    g.planets.push(createPlanet(2650, 1350, 2, 1000));
+    g.planets.push(createPlanet(2262, 554, 2, 1000));
+    g.planets.push(createPlanet(2262, 1152, 2, 1000));
 
     // Neutral planets (random, min 150px apart)
     const neutralCount = 15;
@@ -364,8 +574,8 @@ const App = () => {
     g.camera.zoom = 1;
     const viewW = g.camera.w / g.camera.zoom;
     const viewH = g.camera.h / g.camera.zoom;
-    g.camera.x = clamp(350 - viewW / 2, 0, MAP_W - viewW);
-    g.camera.y = clamp(1000 - viewH / 2, 0, MAP_H - viewH);
+    g.camera.x = clamp(298 - viewW / 2, 0, MAP_W - viewW);
+    g.camera.y = clamp(848 - viewH / 2, 0, MAP_H - viewH);
 
     g.phase = 'playing';
     g.lastFrameTime = performance.now();
@@ -432,6 +642,46 @@ const App = () => {
     return u;
   }
 
+  function spawnShipExplosion(u, g) {
+    const colors = FACTION_COLORS[u.owner];
+    const baseR = UNIT_STATS[u.type].radius;
+    g.particles.push({
+      type: 'explosionCore',
+      x: u.x,
+      y: u.y,
+      life: 0.35,
+      maxLife: 0.35,
+      radius: baseR * 3.2,
+      color: colors.light,
+      core: '#ffffff',
+    });
+    g.particles.push({
+      type: 'explosionRing',
+      x: u.x,
+      y: u.y,
+      life: 0.5,
+      maxLife: 0.5,
+      radius: baseR * 2.4,
+      color: colors.main,
+    });
+    const sparkCount = 10 + Math.floor(Math.random() * 6);
+    for (let i = 0; i < sparkCount; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const spd = 80 + Math.random() * 140;
+      g.particles.push({
+        type: 'spark',
+        x: u.x,
+        y: u.y,
+        vx: Math.cos(a) * spd,
+        vy: Math.sin(a) * spd,
+        life: 0.45 + Math.random() * 0.25,
+        maxLife: 0.7,
+        size: 1.5 + Math.random() * 2.0,
+        color: colors.light,
+      });
+    }
+  }
+
   // ==================== UPDATE FUNCTIONS ====================
   function update(dt) {
     const g = G.current;
@@ -457,8 +707,8 @@ const App = () => {
     // Edge scrolling
     const mx = g.mouse.x;
     const my = g.mouse.y;
-    const sw = g.camera.w * g.camera.zoom;
-    const sh = g.camera.h * g.camera.zoom;
+    const sw = g.camera.w;
+    const sh = g.camera.h;
     const espd = EDGE_SCROLL_SPEED * dt;
     if (mx <= EDGE_SCROLL_MARGIN) g.camera.x -= espd;
     if (mx >= sw - EDGE_SCROLL_MARGIN) g.camera.x += espd;
@@ -566,7 +816,11 @@ const App = () => {
       if (hasTarget && u.attackCooldown <= 0) {
         u.attackCooldown = 0.5;
         u.attackAnim = 1.0;
-        if (u.owner === 1) AUDIO_MANAGER.play('attack', u.type);
+        if (u.owner === 1) {
+          AUDIO_MANAGER.play('attack', u.type);
+        } else {
+          AUDIO_MANAGER.playEnemyAttack(u.type);
+        }
 
         if (unitTargets.length > 0) {
           u.attackAngle = Math.atan2(unitTargets[0].target.y - u.y, unitTargets[0].target.x - u.x);
@@ -609,8 +863,8 @@ const App = () => {
       }
 
       // Movement logic
-      if (unitTargets.length > 0) {
-        // Stop to fight enemy units
+      if (unitTargets.length > 0 && (u.targetX === null || u.targetY === null)) {
+        // Stop to fight enemy units unless a move order is active
         u.vx = 0; u.vy = 0;
       } else if (u.targetX !== null && u.targetY !== null) {
         // Move toward target
@@ -678,9 +932,17 @@ const App = () => {
     }
 
     for (const u of g.units) {
-      if (u.hp <= 0 && u.owner === 1 && !u.deathSoundPlayed) {
+      if (u.hp > 0) continue;
+      if (u.owner === 1 && !u.deathSoundPlayed) {
         u.deathSoundPlayed = true;
         AUDIO_MANAGER.play('destroy', u.type);
+      } else if (u.owner === 2 && !u.deathSoundPlayed) {
+        u.deathSoundPlayed = true;
+        AUDIO_MANAGER.playEnemyDeath(u.type);
+      }
+      if (!u.deathFxPlayed) {
+        u.deathFxPlayed = true;
+        spawnShipExplosion(u, g);
       }
     }
 
@@ -725,6 +987,12 @@ const App = () => {
 
   function updateParticles(dt, g) {
     for (const p of g.particles) {
+      if (p.type === 'spark') {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+      }
       p.life -= dt;
     }
     g.particles = g.particles.filter(p => p.life > 0);
@@ -907,6 +1175,45 @@ const App = () => {
         ctx.moveTo(x - s, y - s); ctx.lineTo(x + s, y + s);
         ctx.moveTo(x + s, y - s); ctx.lineTo(x - s, y + s);
         ctx.stroke();
+      } else if (p.type === 'explosionCore') {
+        const t = 1 - p.life / p.maxLife;
+        const r = p.radius * (0.4 + t * 0.9);
+        const alpha = (1 - t) * 0.9;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+        grad.addColorStop(0, `rgba(255,255,255,${alpha})`);
+        grad.addColorStop(0.35, `rgba(160,220,255,${alpha * 0.9})`);
+        grad.addColorStop(1, `rgba(60,140,255,0)`);
+        ctx.fillStyle = grad;
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      } else if (p.type === 'explosionRing') {
+        const t = 1 - p.life / p.maxLife;
+        const r = p.radius * (0.6 + t * 1.6);
+        const alpha = (1 - t) * 0.6;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.strokeStyle = p.color;
+        ctx.globalAlpha = alpha;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      } else if (p.type === 'spark') {
+        const alpha = p.life / p.maxLife;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       }
     }
     ctx.globalAlpha = 1;
@@ -1720,8 +2027,10 @@ const App = () => {
 
       // ===================== PLAYER / ALLIED UNITS (IMAGE-BASED) =====================
       } else {
-        const angle = Math.atan2(u.vy, u.vx) || 0;
         const isMoving = Math.abs(u.vx) > 1 || Math.abs(u.vy) > 1;
+        const angle = isMoving
+          ? Math.atan2(u.vy, u.vx)
+          : (u.attackAngle || 0);
         const thrustOffset = anim > 0.5 ? (anim - 0.5) * 2 * 4 : 0;
         const recoil = anim > 0.5 ? (anim - 0.5) * 2 * 2 : 0;
 
@@ -1976,6 +2285,21 @@ const App = () => {
     return null;
   }
 
+  function getUnitAtWorld(wx, wy, g) {
+    let best = null;
+    let bestDist = Infinity;
+    for (const u of g.units) {
+      if (u.owner !== 1 || u.hp <= 0) continue;
+      const r = (UNIT_STATS[u.type]?.radius || 6) + 6;
+      const d = dist(wx, wy, u.x, u.y);
+      if (d <= r && d < bestDist) {
+        best = u;
+        bestDist = d;
+      }
+    }
+    return best;
+  }
+
   function handleMouseDown(e) {
     const g = G.current;
     if (g.phase !== 'playing') return;
@@ -2003,7 +2327,15 @@ const App = () => {
 
       const wx = sx / g.camera.zoom + g.camera.x;
       const wy = sy / g.camera.zoom + g.camera.y;
+      const clickedUnit = getUnitAtWorld(wx, wy, g);
       const clickedPlanet = getPlanetAtWorld(wx, wy, g);
+
+      if (clickedUnit) {
+        g.selectedPlanetIds.clear();
+        g.selectedUnitIds.clear();
+        g.selectedUnitIds.add(clickedUnit.id);
+        return;
+      }
 
       // Double-click detection
       const now = Date.now();
@@ -2348,13 +2680,19 @@ const App = () => {
       handleKeyDown(e);
     };
     const onKU = (e) => handleKeyUp(e);
+    const getMinZoomForViewport = () => {
+      const g2 = G.current;
+      return Math.max(g2.camera.w / MAP_W, g2.camera.h / MAP_H, MIN_ZOOM);
+    };
+
     const onWheel = (e) => {
       e.preventDefault();
       const g2 = G.current;
       if (g2.phase !== 'playing') return;
       const oldZoom = g2.camera.zoom;
+      const minZoom = getMinZoomForViewport();
       if (e.deltaY < 0) g2.camera.zoom = Math.min(MAX_ZOOM, oldZoom + ZOOM_STEP);
-      else g2.camera.zoom = Math.max(MIN_ZOOM, oldZoom - ZOOM_STEP);
+      else g2.camera.zoom = Math.max(minZoom, oldZoom - ZOOM_STEP);
       // Keep center stable
       const cx = g2.camera.x + (g2.camera.w / oldZoom) / 2;
       const cy = g2.camera.y + (g2.camera.h / oldZoom) / 2;
@@ -2368,6 +2706,8 @@ const App = () => {
       canvas.height = window.innerHeight;
       G.current.camera.w = canvas.width;
       G.current.camera.h = canvas.height;
+      const minZoom = getMinZoomForViewport();
+      if (G.current.camera.zoom < minZoom) G.current.camera.zoom = minZoom;
     };
 
     canvas.addEventListener('mousedown', onMD);
@@ -2594,7 +2934,7 @@ const App = () => {
             {/* Controls info */}
             <div className="mt-16 text-center space-y-2" style={{ animation: 'fadeSlideUp 2.4s ease-out' }}>
               <p style={{ color: 'rgba(120,150,180,0.35)', fontSize: '0.7rem', letterSpacing: '0.1em' }}>
-                WASD / 방향키: 카메라 이동 &nbsp;&middot;&nbsp; 좌클릭: 선택 &nbsp;&middot;&nbsp; 우클릭: 명령
+                WASD / 방향키: 카메라 이동 &nbsp;&middot;&nbsp; 좌클릭: 선택 &nbsp;&middot;&nbsp; 우클릭: 명령 &nbsp;&middot;&nbsp; ESC: 일시정지
               </p>
               <p style={{ color: 'rgba(120,150,180,0.35)', fontSize: '0.7rem', letterSpacing: '0.1em' }}>
                 F1~F2: 병력 선택 &nbsp;&middot;&nbsp; F3~F4: 행성 선택 &nbsp;&middot;&nbsp; 1~4: 부대 관리
@@ -2805,9 +3145,9 @@ const App = () => {
                     setUi(prev => ({ ...prev, phase: 'help' }));
                   }}
                   style={{ width: '100%', padding: '12px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold',
-                           background: '#374151', color: '#e5e7eb', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
-                  onMouseEnter={e => e.target.style.background = '#4b5563'}
-                  onMouseLeave={e => e.target.style.background = '#374151'}>
+                           background: '#16a34a', color: '#ffffff', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}
+                  onMouseEnter={e => e.target.style.background = '#22c55e'}
+                  onMouseLeave={e => e.target.style.background = '#16a34a'}>
                   도움말
                 </button>
               </>
