@@ -50,7 +50,7 @@
 // React + HTML5 Canvas + Tailwind CSS (Single File)
 // ============================================================
 
-const { useState, useRef, useEffect, useCallback } = React;
+const { useState, useRef, useEffect, useCallback, useMemo } = React;
 
 // ==================== CONSTANTS ====================
 const MAP_W = 2560;
@@ -88,8 +88,8 @@ const FACTION_COLORS = {
 };
 
 // Minimap
-const MM_W = 320;
-const MM_H = 180;
+const MM_W = 352;
+const MM_H = 198;
 const MM_MARGIN = 10;
 
 // ==================== SHIP IMAGES ====================
@@ -512,7 +512,16 @@ const App = () => {
   });
   const [pausePanel, setPausePanel] = useState('menu');
   const [volume, setVolume] = useState({ master: 0.8, sfx: 0.8 });
+  const [viewport, setViewport] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
   const uiRef = useRef({ phase: 'start', gameResult: '' });
+  const uiScale = useMemo(() => {
+    const baseW = 1920;
+    const baseH = 1080;
+    const scale = Math.min(viewport.w / baseW, viewport.h / baseH);
+    return clamp(scale, 0.85, 1.25);
+  }, [viewport.w, viewport.h]);
+  const hudScaleMain = uiScale * 1.2;
+  const hudScaleBottom = uiScale * 1.1;
 
   const playPhaseBgm = useCallback((phase, gameResult) => {
     if (phase === 'start') {
@@ -2139,7 +2148,7 @@ const App = () => {
           if (u.type === 1) {
             // 요격기 (nose UP): engines at bottom → flames extend in +Y direction
             for (let side = -1; side <= 1; side += 2) {
-              const exX = side * drawW * 0.25;
+              const exX = side * drawW * 0.15;
               const exY = drawH * 0.45;
               const flameLen = drawH * 0.35 * flickerLen;
               const flameGrad = ctx.createLinearGradient(exX, exY, exX, exY + flameLen);
@@ -2796,6 +2805,7 @@ const App = () => {
       canvas.height = window.innerHeight;
       G.current.camera.w = canvas.width;
       G.current.camera.h = canvas.height;
+      setViewport({ w: window.innerWidth, h: window.innerHeight });
       const minZoom = getMinZoomForViewport();
       if (G.current.camera.zoom < minZoom) G.current.camera.zoom = minZoom;
     };
@@ -3044,7 +3054,10 @@ const App = () => {
       {ui.phase === 'playing' && (
         <>
           {/* Resource display */}
-          <div className="absolute top-4 left-4 z-40 space-y-1 flex items-center gap-2">
+          <div
+            className="absolute top-4 left-4 z-40 space-y-1 flex items-center gap-2"
+            style={{ transform: `scale(${hudScaleMain})`, transformOrigin: 'top left' }}
+          >
             <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-lg border border-white/10">
               <span className="text-yellow-400 font-bold text-lg">
                 ⬡ {ui.playerGold} G
@@ -3068,7 +3081,10 @@ const App = () => {
 
           {/* Selected units count */}
           {ui.selectedUnitsCount > 0 && (
-            <div className="absolute top-4 right-[330px] z-40">
+            <div
+              className="absolute top-4 right-[330px] z-40"
+              style={{ transform: `scale(${hudScaleMain})`, transformOrigin: 'top right' }}
+            >
               <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-lg border border-white/10">
                 <span className="text-green-300 font-bold text-lg">
                   유닛 선택: {ui.selectedUnitsCount}기
@@ -3078,7 +3094,10 @@ const App = () => {
           )}
 
           {/* Control Groups UI */}
-          <div className="absolute bottom-4 left-4 z-40 flex gap-2">
+          <div
+            className="absolute bottom-4 left-4 z-40 flex gap-2"
+            style={{ transform: `scale(${hudScaleMain})`, transformOrigin: 'bottom left' }}
+          >
             {[1,2,3,4].map(num => {
               const count = ui.controlGroupCounts[num];
               return (
@@ -3115,7 +3134,10 @@ const App = () => {
 
           {/* Control Panel (when planets selected) */}
           {hasSelectedPlanets && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
+            <div
+              className="absolute bottom-4 left-1/2 z-40"
+              style={{ transform: `translateX(-50%) scale(${hudScaleBottom})`, transformOrigin: 'bottom center' }}
+            >
               <div className="bg-black/80 backdrop-blur-md px-6 py-4 rounded-xl border border-white/15
                               flex items-center gap-6">
                 {/* Planet info */}
