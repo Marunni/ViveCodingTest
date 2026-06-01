@@ -115,6 +115,9 @@ const AUDIO_FILES = {
     2: '아군 유닛 사운드/구축함 파괴 1.mp3',
     3: '아군 유닛 사운드/전함 파괴 1.mp3',
   },
+  ui: {
+    ingame: '버튼음/인게임 버튼음.wav',
+  },
 };
 const BGM_FILES = {
   start: 'BGM/메인화면.mp3',
@@ -168,18 +171,27 @@ function createSoundPool(src, size) {
 }
 
 function createAudioManager() {
-  const pools = { attack: {}, destroy: {} };
+  const pools = { attack: {}, destroy: {}, ui: {} };
   const types = [1, 2, 3];
   for (const type of types) {
     pools.attack[type] = createSoundPool(AUDIO_FILES.attack[type], 5);
     pools.destroy[type] = createSoundPool(AUDIO_FILES.destroy[type], 3);
   }
+  pools.ui.ingame = createSoundPool(AUDIO_FILES.ui.ingame, 4);
 
   const MAX_SFX_VOLUME = 0.9;
   const ATTACK_SOFTEN_FADE_MS = 40;
   const SFX_TYPE_VOLUME = {
     attack: {
       1: 0.6,
+    },
+    destroy: {
+      1: 0.7,
+      2: 2.0,
+      3: 2.0,
+    },
+    ui: {
+      ingame: 0.8,
     },
   };
   let masterVolume = 0.8;
@@ -403,8 +415,10 @@ function createAudioManager() {
     playEnemyDeathSynth(vol, type);
   };
 
+  const playUiIngame = () => play('ui', 'ingame');
+
   setVolumes(masterVolume, sfxVolume);
-  return { play, playEnemyAttack, playEnemyDeath, setVolumes };
+  return { play, playEnemyAttack, playEnemyDeath, playUiIngame, setVolumes };
 }
 
 const AUDIO_MANAGER = createAudioManager();
@@ -897,8 +911,12 @@ const App = () => {
               // Enemy/neutral planet: keep attacking (handled above)
             } else {
               const speed = stats.speed;
-              u.vx = (dx / d) * speed;
-              u.vy = (dy / d) * speed;
+              if (!Number.isFinite(d) || d < 0.0001) {
+                u.vx = 0; u.vy = 0;
+              } else {
+                u.vx = (dx / d) * speed;
+                u.vy = (dy / d) * speed;
+              }
             }
           } else {
             // Target planet doesn't exist
@@ -913,8 +931,12 @@ const App = () => {
             u.vx = 0; u.vy = 0;
           } else {
             const speed = UNIT_STATS[u.type].speed;
-            u.vx = (dx / d) * speed;
-            u.vy = (dy / d) * speed;
+            if (!Number.isFinite(d) || d < 0.0001) {
+              u.vx = 0; u.vy = 0;
+            } else {
+              u.vx = (dx / d) * speed;
+              u.vy = (dy / d) * speed;
+            }
           }
         }
       } else {
@@ -1006,30 +1028,6 @@ const App = () => {
     const aiPlanets = g.planets.filter(p => p.owner === 2);
     const hostilePlanets = g.planets.filter(p => p.owner !== 2);
 
-    // Re-home idle AI units that lost their planet to keep them active.
-    if (aiPlanets.length > 0) {
-      for (const u of g.units) {
-        if (u.owner !== 2) continue;
-        if (u.homePlanetId) continue;
-        if (u.state !== 'IDLE' && u.state !== 'IDLE_FIELD') continue;
-        let nearest = null;
-        let best = Infinity;
-        for (const p of aiPlanets) {
-          const d = dist(u.x, u.y, p.x, p.y);
-          if (d < best) { best = d; nearest = p; }
-        }
-        if (nearest) {
-          u.homePlanetId = nearest.id;
-          if (u.state === 'IDLE_FIELD') {
-            u.state = 'MOVING';
-            u.targetPlanetId = nearest.id;
-            u.targetX = nearest.x;
-            u.targetY = nearest.y;
-          }
-        }
-      }
-    }
-
     for (const p of aiPlanets) {
       // 30% chance to change production type
       if (Math.random() < 0.3) {
@@ -1041,8 +1039,7 @@ const App = () => {
 
       // Count idle units at this planet
       const idleUnits = g.units.filter(u => u.owner === 2 && u.homePlanetId === p.id && u.state === 'IDLE');
-      const attackThreshold = Math.max(3, Math.ceil(p.level * 2));
-      if (idleUnits.length >= attackThreshold && hostilePlanets.length > 0) {
+      if (idleUnits.length > 5 && hostilePlanets.length > 0) {
         const target = hostilePlanets[Math.floor(Math.random() * hostilePlanets.length)];
         for (const u of idleUnits) {
           u.state = 'MOVING';
@@ -2463,6 +2460,8 @@ const App = () => {
     e.preventDefault();
     const g = G.current;
     if (g.phase !== 'playing') return;
+
+    AUDIO_MANAGER.playUiIngame();
 
     const sx = e.clientX;
     const sy = e.clientY;
