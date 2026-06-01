@@ -69,6 +69,9 @@ const AI_PULSE_INTERVAL = 5;
 const SEPARATION_DIST = 35;
 const SEPARATION_STRENGTH = 100;
 const PLANET_RADIUS = 30;
+const AI_EXPAND_MIN_SEC = 60;
+const AI_EXPAND_MAX_SEC = 120;
+const AI_EXPAND_MAX_DIST = 700;
 
 const UNIT_STATS = {
     1: { name: '요격기', hp: 24, atk: 6, speed: 144, spawnTime: 4.8, radius: 6, pop: 1, gold: 1, shape: 'triangle', maxTargets: 1 },
@@ -115,12 +118,10 @@ const AUDIO_FILES = {
     2: '아군 유닛 사운드/구축함 파괴 1.mp3',
     3: '아군 유닛 사운드/전함 파괴 1.mp3',
   },
-  ui: {
-    ingame: '버튼음/인게임 버튼음.wav',
-  },
 };
 const BGM_FILES = {
   start: 'BGM/메인화면.mp3',
+  ingame: 'BGM/인게임bgm.mp3',
   victory: 'BGM/승리화면.mp3',
   defeat: 'BGM/패배화면.mp3',
 };
@@ -171,27 +172,18 @@ function createSoundPool(src, size) {
 }
 
 function createAudioManager() {
-  const pools = { attack: {}, destroy: {}, ui: {} };
+  const pools = { attack: {}, destroy: {} };
   const types = [1, 2, 3];
   for (const type of types) {
     pools.attack[type] = createSoundPool(AUDIO_FILES.attack[type], 5);
     pools.destroy[type] = createSoundPool(AUDIO_FILES.destroy[type], 3);
   }
-  pools.ui.ingame = createSoundPool(AUDIO_FILES.ui.ingame, 4);
 
   const MAX_SFX_VOLUME = 0.9;
   const ATTACK_SOFTEN_FADE_MS = 40;
   const SFX_TYPE_VOLUME = {
     attack: {
       1: 0.6,
-    },
-    destroy: {
-      1: 0.7,
-      2: 2.0,
-      3: 2.0,
-    },
-    ui: {
-      ingame: 0.8,
     },
   };
   let masterVolume = 0.8;
@@ -346,7 +338,7 @@ function createAudioManager() {
     const lastAt = lastPlayedAt.get(key) ?? -Infinity;
     if (now - lastAt < SAME_SOUND_COOLDOWN_MS) return;
     lastPlayedAt.set(key, now);
-    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 0.6;
+    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 1.2;
     playEnemyAttackSynth(vol, type);
   };
 
@@ -388,7 +380,7 @@ function createAudioManager() {
 
     const noiseGain = ctx.createGain();
     noiseGain.gain.setValueAtTime(0.3, now);
-    noiseGain.gain.exponentialRampToValueAtTime(0.02, now + duration * 0.8);
+    noiseGain.gain.exponentialRampToValueAtTime(0.02, now + duration * 1.2);
 
     growl.connect(lowpass);
     sub.connect(lowpass);
@@ -411,14 +403,12 @@ function createAudioManager() {
     const lastAt = lastPlayedAt.get(key) ?? -Infinity;
     if (now - lastAt < SAME_SOUND_COOLDOWN_MS) return;
     lastPlayedAt.set(key, now);
-    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 0.65;
+    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 0.8;
     playEnemyDeathSynth(vol, type);
   };
 
-  const playUiIngame = () => play('ui', 'ingame');
-
   setVolumes(masterVolume, sfxVolume);
-  return { play, playEnemyAttack, playEnemyDeath, playUiIngame, setVolumes };
+  return { play, playEnemyAttack, playEnemyDeath, setVolumes };
 }
 
 const AUDIO_MANAGER = createAudioManager();
@@ -499,6 +489,8 @@ const App = () => {
     aiPop: 0,
     aiTimer: 0,
     uiSyncTimer: 0,
+    elapsedTime: 0,
+    aiExpandUntil: 0,
     lastClickTime: 0,
     lastClickPlanetId: null,
     isMinimapDragging: false,
@@ -526,6 +518,10 @@ const App = () => {
       BGM_MANAGER.play('start');
       return;
     }
+    if (phase === 'playing') {
+      BGM_MANAGER.play('ingame');
+      return;
+    }
     if (phase === 'gameover') {
       if (gameResult === 'victory') {
         BGM_MANAGER.play('victory');
@@ -551,6 +547,8 @@ const App = () => {
     g.aiPop = 0;
     g.aiTimer = 0;
     g.uiSyncTimer = 0;
+    g.elapsedTime = 0;
+    g.aiExpandUntil = AI_EXPAND_MIN_SEC + Math.random() * (AI_EXPAND_MAX_SEC - AI_EXPAND_MIN_SEC);
     g.selectedPlanetIds = new Set();
     g.selectedUnitIds = new Set();
     g.controlGroups = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() };
@@ -565,21 +563,41 @@ const App = () => {
     g.planets.push(createPlanet(2262, 554, 2, 1000));
     g.planets.push(createPlanet(2262, 1152, 2, 1000));
 
-    // Neutral planets (random, min 150px apart)
-    const neutralCount = 15;
-    let attempts = 0;
-    while (g.planets.length < 4 + neutralCount && attempts < 5000) {
-      attempts++;
-      const nx = 200 + Math.random() * (MAP_W - 400);
-      const ny = 150 + Math.random() * (MAP_H - 300);
-      let tooClose = false;
-      for (const p of g.planets) {
-        if (dist(nx, ny, p.x, p.y) < 180) { tooClose = true; break; }
+    // Neutral planets (random, min 150px apart, balanced left/center/right)
+    const neutralCount = 20;
+    const perZone = Math.floor(neutralCount / 3);
+    const remainder = neutralCount - perZone * 3;
+    const leftTarget = perZone + (remainder > 0 ? 1 : 0);
+    const centerTarget = perZone + (remainder > 1 ? 1 : 0);
+    const rightTarget = perZone;
+    const playerLineX = 298;
+    const aiLineX = 2262;
+    const neutralMinX = playerLineX + 120;
+    const neutralMaxX = aiLineX - 120;
+    const zoneW = (neutralMaxX - neutralMinX) / 3;
+    const zoneGap = 60;
+
+    const placeNeutral = (minX, maxX, target) => {
+      let placed = 0;
+      let attempts = 0;
+      while (placed < target && attempts < 3000) {
+        attempts++;
+        const nx = minX + Math.random() * (maxX - minX);
+        const ny = 150 + Math.random() * (MAP_H - 300);
+        let tooClose = false;
+        for (const p of g.planets) {
+          if (dist(nx, ny, p.x, p.y) < 180) { tooClose = true; break; }
+        }
+        if (!tooClose) {
+          g.planets.push(createPlanet(nx, ny, 0, 400));
+          placed++;
+        }
       }
-      if (!tooClose) {
-        g.planets.push(createPlanet(nx, ny, 0, 400));
-      }
-    }
+    };
+
+    placeNeutral(neutralMinX + zoneGap, neutralMinX + zoneW - zoneGap, leftTarget);
+    placeNeutral(neutralMinX + zoneW + zoneGap, neutralMinX + zoneW * 2 - zoneGap, centerTarget);
+    placeNeutral(neutralMinX + zoneW * 2 + zoneGap, neutralMaxX - zoneGap, rightTarget);
 
     // Camera initial: center on player area
     const canvas = canvasRef.current;
@@ -653,7 +671,30 @@ const App = () => {
       u.targetPlanetId = planet.rallyPointPlanetId || null;
     }
 
+    if (planet.owner === 2 && g.elapsedTime < g.aiExpandUntil && u.state === 'IDLE') {
+      const target = findExpandTarget(planet, g);
+      if (target) {
+        u.state = 'MOVING';
+        u.homePlanetId = null;
+        u.targetPlanetId = target.id;
+        u.targetX = target.x;
+        u.targetY = target.y;
+      }
+    }
+
     return u;
+  }
+
+  function findExpandTarget(planet, g) {
+    let best = Infinity;
+    let target = null;
+    for (const n of g.planets) {
+      if (n.owner !== 0) continue;
+      const d = dist(planet.x, planet.y, n.x, n.y);
+      if (d < best) { best = d; target = n; }
+    }
+    if (best > AI_EXPAND_MAX_DIST) return null;
+    return target;
   }
 
   function spawnShipExplosion(u, g) {
@@ -700,6 +741,8 @@ const App = () => {
   function update(dt) {
     const g = G.current;
     if (g.phase !== 'playing') return;
+
+    g.elapsedTime += dt;
 
     updateCamera(dt, g);
     updatePlanets(dt, g);
@@ -911,12 +954,8 @@ const App = () => {
               // Enemy/neutral planet: keep attacking (handled above)
             } else {
               const speed = stats.speed;
-              if (!Number.isFinite(d) || d < 0.0001) {
-                u.vx = 0; u.vy = 0;
-              } else {
-                u.vx = (dx / d) * speed;
-                u.vy = (dy / d) * speed;
-              }
+              u.vx = (dx / d) * speed;
+              u.vy = (dy / d) * speed;
             }
           } else {
             // Target planet doesn't exist
@@ -931,12 +970,8 @@ const App = () => {
             u.vx = 0; u.vy = 0;
           } else {
             const speed = UNIT_STATS[u.type].speed;
-            if (!Number.isFinite(d) || d < 0.0001) {
-              u.vx = 0; u.vy = 0;
-            } else {
-              u.vx = (dx / d) * speed;
-              u.vy = (dy / d) * speed;
-            }
+            u.vx = (dx / d) * speed;
+            u.vy = (dy / d) * speed;
           }
         }
       } else {
@@ -1027,6 +1062,8 @@ const App = () => {
 
     const aiPlanets = g.planets.filter(p => p.owner === 2);
     const hostilePlanets = g.planets.filter(p => p.owner !== 2);
+    const neutralPlanets = g.planets.filter(p => p.owner === 0);
+    const isExpandPhase = g.elapsedTime < g.aiExpandUntil;
 
     for (const p of aiPlanets) {
       // 30% chance to change production type
@@ -1039,8 +1076,16 @@ const App = () => {
 
       // Count idle units at this planet
       const idleUnits = g.units.filter(u => u.owner === 2 && u.homePlanetId === p.id && u.state === 'IDLE');
-      if (idleUnits.length > 5 && hostilePlanets.length > 0) {
-        const target = hostilePlanets[Math.floor(Math.random() * hostilePlanets.length)];
+      const idleThreshold = isExpandPhase ? 0 : 5;
+      if (idleUnits.length > idleThreshold) {
+        let target = null;
+        if (isExpandPhase && neutralPlanets.length > 0) {
+          target = findExpandTarget(p, g);
+        } else if (hostilePlanets.length > 0) {
+          target = hostilePlanets[Math.floor(Math.random() * hostilePlanets.length)];
+        }
+
+        if (!target) continue;
         for (const u of idleUnits) {
           u.state = 'MOVING';
           u.homePlanetId = null;
@@ -2460,8 +2505,6 @@ const App = () => {
     e.preventDefault();
     const g = G.current;
     if (g.phase !== 'playing') return;
-
-    AUDIO_MANAGER.playUiIngame();
 
     const sx = e.clientX;
     const sy = e.clientY;
