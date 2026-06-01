@@ -1006,6 +1006,30 @@ const App = () => {
     const aiPlanets = g.planets.filter(p => p.owner === 2);
     const hostilePlanets = g.planets.filter(p => p.owner !== 2);
 
+    // Re-home idle AI units that lost their planet to keep them active.
+    if (aiPlanets.length > 0) {
+      for (const u of g.units) {
+        if (u.owner !== 2) continue;
+        if (u.homePlanetId) continue;
+        if (u.state !== 'IDLE' && u.state !== 'IDLE_FIELD') continue;
+        let nearest = null;
+        let best = Infinity;
+        for (const p of aiPlanets) {
+          const d = dist(u.x, u.y, p.x, p.y);
+          if (d < best) { best = d; nearest = p; }
+        }
+        if (nearest) {
+          u.homePlanetId = nearest.id;
+          if (u.state === 'IDLE_FIELD') {
+            u.state = 'MOVING';
+            u.targetPlanetId = nearest.id;
+            u.targetX = nearest.x;
+            u.targetY = nearest.y;
+          }
+        }
+      }
+    }
+
     for (const p of aiPlanets) {
       // 30% chance to change production type
       if (Math.random() < 0.3) {
@@ -1017,7 +1041,8 @@ const App = () => {
 
       // Count idle units at this planet
       const idleUnits = g.units.filter(u => u.owner === 2 && u.homePlanetId === p.id && u.state === 'IDLE');
-      if (idleUnits.length > 5 && hostilePlanets.length > 0) {
+      const attackThreshold = Math.max(3, Math.ceil(p.level * 2));
+      if (idleUnits.length >= attackThreshold && hostilePlanets.length > 0) {
         const target = hostilePlanets[Math.floor(Math.random() * hostilePlanets.length)];
         for (const u of idleUnits) {
           u.state = 'MOVING';
