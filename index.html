@@ -74,9 +74,9 @@ const AI_EXPAND_MAX_SEC = 120;
 const AI_EXPAND_MAX_DIST = 700;
 
 const UNIT_STATS = {
-    1: { name: '요격기', hp: 24, atk: 6, speed: 144, spawnTime: 4.8, radius: 6, pop: 1, gold: 1, shape: 'triangle', maxTargets: 1 },
-  2: { name: '구축함', hp: 96, atk: 18, speed: 80, spawnTime: 9.6, radius: 9, pop: 2, gold: 2, shape: 'square', maxTargets: 2 },
-  3: { name: '전함', hp: 320, atk: 40, speed: 40, spawnTime: 14.4, radius: 14, pop: 3, gold: 3, shape: 'circle', maxTargets: 3 },
+    1: { name: '요격기', hp: 31, atk: 6, speed: 144, spawnTime: 5, radius: 6, pop: 1, gold: 1, shape: 'triangle', maxTargets: 1 },
+  2: { name: '구축함', hp: 110, atk: 18, speed: 80, spawnTime: 10, radius: 9, pop: 2, gold: 2, shape: 'square', maxTargets: 2 },
+  3: { name: '전함', hp: 390, atk: 30, speed: 40, spawnTime: 15, radius: 14, pop: 3, gold: 3, shape: 'circle', maxTargets: 3 },
 };
 
 const ENEMY_UNIT_NAMES = { 1: '맹독충', 2: '칼날벌레', 3: '거대갑충' };
@@ -338,7 +338,7 @@ function createAudioManager() {
     const lastAt = lastPlayedAt.get(key) ?? -Infinity;
     if (now - lastAt < SAME_SOUND_COOLDOWN_MS) return;
     lastPlayedAt.set(key, now);
-    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 1.2;
+    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 1.5;
     playEnemyAttackSynth(vol, type);
   };
 
@@ -403,7 +403,7 @@ function createAudioManager() {
     const lastAt = lastPlayedAt.get(key) ?? -Infinity;
     if (now - lastAt < SAME_SOUND_COOLDOWN_MS) return;
     lastPlayedAt.set(key, now);
-    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 0.8;
+    const vol = masterVolume * sfxVolume * MAX_SFX_VOLUME * 3.0;
     playEnemyDeathSynth(vol, type);
   };
 
@@ -493,6 +493,7 @@ const App = () => {
     aiExpandUntil: 0,
     lastClickTime: 0,
     lastClickPlanetId: null,
+    lastClickUnitId: null,
     isMinimapDragging: false,
     lastFrameTime: 0,
     stats: { produced: {1:0,2:0,3:0}, kills: {1:0,2:0,3:0}, goldEarned: 0, planetsCaptured: 0 },
@@ -564,12 +565,10 @@ const App = () => {
     g.planets.push(createPlanet(2262, 1152, 2, 1000));
 
     // Neutral planets (random, min 150px apart, balanced left/center/right)
-    const neutralCount = 20;
-    const perZone = Math.floor(neutralCount / 3);
-    const remainder = neutralCount - perZone * 3;
-    const leftTarget = perZone + (remainder > 0 ? 1 : 0);
-    const centerTarget = perZone + (remainder > 1 ? 1 : 0);
-    const rightTarget = perZone;
+    const neutralCount = 18;
+    const leftTarget = 7;
+    const centerTarget = 4;
+    const rightTarget = 7;
     const playerLineX = 298;
     const aiLineX = 2262;
     const neutralMinX = playerLineX + 120;
@@ -740,7 +739,7 @@ const App = () => {
   // ==================== UPDATE FUNCTIONS ====================
   function update(dt) {
     const g = G.current;
-    if (g.phase !== 'playing') return;
+    if (g.phase !== 'playing' || uiRef.current.phase === 'paused') return;
 
     g.elapsedTime += dt;
 
@@ -868,6 +867,7 @@ const App = () => {
       }
 
       const hasTarget = unitTargets.length > 0 || planetTarget;
+      const hasManualOrder = u.owner === 1 && u.targetX !== null && u.targetY !== null;
 
       // Attack if targets found
       if (hasTarget && u.attackCooldown <= 0) {
@@ -920,8 +920,8 @@ const App = () => {
       }
 
       // Movement logic
-      if (unitTargets.length > 0 && (u.targetX === null || u.targetY === null)) {
-        // Stop to fight enemy units unless a move order is active
+      if (hasTarget && !hasManualOrder) {
+        // Stop to fight when auto-engaging without a player order
         u.vx = 0; u.vy = 0;
       } else if (u.targetX !== null && u.targetY !== null) {
         // Move toward target
@@ -2139,7 +2139,7 @@ const App = () => {
           if (u.type === 1) {
             // 요격기 (nose UP): engines at bottom → flames extend in +Y direction
             for (let side = -1; side <= 1; side += 2) {
-              const exX = side * drawW * 0.28;
+              const exX = side * drawW * 0.25;
               const exY = drawH * 0.45;
               const flameLen = drawH * 0.35 * flickerLen;
               const flameGrad = ctx.createLinearGradient(exX, exY, exX, exY + flameLen);
@@ -2397,6 +2397,30 @@ const App = () => {
       const clickedUnit = getUnitAtWorld(wx, wy, g);
       const clickedPlanet = getPlanetAtWorld(wx, wy, g);
 
+      // Double-click detection (units)
+      const now = Date.now();
+      if (clickedUnit) {
+        if (now - g.lastClickTime < 300 && g.lastClickUnitId === clickedUnit.id) {
+          g.selectedPlanetIds.clear();
+          g.selectedUnitIds.clear();
+          const viewW = g.camera.w / g.camera.zoom;
+          const viewH = g.camera.h / g.camera.zoom;
+          for (const u of g.units) {
+            if (u.owner !== 1 || u.hp <= 0 || u.type !== clickedUnit.type) continue;
+            const usx = u.x - g.camera.x;
+            const usy = u.y - g.camera.y;
+            if (usx >= -20 && usx <= viewW + 20 && usy >= -20 && usy <= viewH + 20) {
+              g.selectedUnitIds.add(u.id);
+            }
+          }
+          g.lastClickTime = 0;
+          g.lastClickUnitId = null;
+          return;
+        }
+        g.lastClickTime = now;
+        g.lastClickUnitId = clickedUnit.id;
+      }
+
       if (clickedUnit) {
         g.selectedPlanetIds.clear();
         g.selectedUnitIds.clear();
@@ -2404,8 +2428,7 @@ const App = () => {
         return;
       }
 
-      // Double-click detection
-      const now = Date.now();
+      // Double-click detection (planets)
       if (clickedPlanet && clickedPlanet.owner === 1) {
         if (now - g.lastClickTime < 300 && g.lastClickPlanetId === clickedPlanet.id) {
           // Double click: select all visible friendly planets
@@ -3021,7 +3044,7 @@ const App = () => {
       {ui.phase === 'playing' && (
         <>
           {/* Resource display */}
-          <div className="absolute top-4 left-4 z-40 space-y-1">
+          <div className="absolute top-4 left-4 z-40 space-y-1 flex items-center gap-2">
             <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-lg border border-white/10">
               <span className="text-yellow-400 font-bold text-lg">
                 ⬡ {ui.playerGold} G
@@ -3031,6 +3054,16 @@ const App = () => {
                 ♦ {ui.playerPop} / {ui.playerMaxPop || BASE_POP}
               </span>
             </div>
+            <button
+              onClick={() => {
+                const g = G.current;
+                g.phase = 'paused';
+                setUi(prev => ({ ...prev, phase: 'help' }));
+              }}
+              className="px-3 py-1 text-xs font-bold rounded border border-green-400/50 text-green-200 hover:text-white hover:border-green-300"
+              style={{ background: 'rgba(22,163,74,0.35)' }}>
+              도움말
+            </button>
           </div>
 
           {/* Selected units count */}
@@ -3310,8 +3343,12 @@ const App = () => {
                     <td className="py-2 text-gray-300">행성/유닛 선택 (드래그로 범위 선택)</td>
                   </tr>
                   <tr className="border-b border-white/5">
-                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">좌클릭 x2 (더블클릭)</td>
-                    <td className="py-2 text-gray-300">행성 생산 유닛 변경</td>
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">좌클릭 x2 (유닛)</td>
+                    <td className="py-2 text-gray-300">시야 내 동일 유닛 전체 선택</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">좌클릭 x2 (행성)</td>
+                    <td className="py-2 text-gray-300">시야 내 아군 행성 전체 선택</td>
                   </tr>
                   <tr className="border-b border-white/5">
                     <td className="py-2 pr-4 text-yellow-300 font-mono font-bold">우클릭</td>
@@ -3411,7 +3448,7 @@ const App = () => {
                   <span className="text-2xl">▲</span>
                   <div className="flex-1">
                     <div className="text-white font-bold">요격기 <span className="text-gray-500 text-xs font-normal">(인구 1)</span></div>
-                    <div className="text-gray-400 text-xs">HP 24 | 공격력 6 | 속도 144 | 생산시간 4.8초 | 처치 보상 1G</div>
+                    <div className="text-gray-400 text-xs">HP 31 | 공격력 6 | 속도 144 | 생산시간 5초 | 처치 보상 1G</div>
                     <div className="text-green-400 text-xs mt-1">빠른 속도, 대량 생산에 적합한 정찰/견제 유닛</div>
                   </div>
                 </div>
@@ -3419,7 +3456,7 @@ const App = () => {
                   <span className="text-2xl">■</span>
                   <div className="flex-1">
                     <div className="text-white font-bold">구축함 <span className="text-gray-500 text-xs font-normal">(인구 2)</span></div>
-                    <div className="text-gray-400 text-xs">HP 96 | 공격력 18 | 속도 80 | 생산시간 9.6초 | 처치 보상 2G</div>
+                    <div className="text-gray-400 text-xs">HP 110 | 공격력 18 | 속도 80 | 생산시간 10초 | 처치 보상 2G</div>
                     <div className="text-orange-400 text-xs mt-1">사거리 내 적 유닛 최대 2기 동시 공격 가능</div>
                     <div className="text-green-400 text-xs">균형 잡힌 스탯의 주력 전투 유닛</div>
                   </div>
@@ -3428,7 +3465,7 @@ const App = () => {
                   <span className="text-2xl">●</span>
                   <div className="flex-1">
                     <div className="text-white font-bold">전함 <span className="text-gray-500 text-xs font-normal">(인구 3)</span></div>
-                    <div className="text-gray-400 text-xs">HP 320 | 공격력 40 | 속도 40 | 생산시간 14.4초 | 처치 보상 3G</div>
+                    <div className="text-gray-400 text-xs">HP 360 | 공격력 30 | 속도 40 | 생산시간 15초 | 처치 보상 3G</div>
                     <div className="text-orange-400 text-xs mt-1">사거리 내 적 유닛 최대 3기 동시 공격 가능</div>
                     <div className="text-green-400 text-xs">높은 체력과 강력한 공격력의 핵심 전력 유닛</div>
                   </div>
